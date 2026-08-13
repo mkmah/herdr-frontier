@@ -1,16 +1,19 @@
 // Manual single-issue dispatch (issue 12): the shared claim mutex + the dispatch
-// path. `Enter` on a selected Issue → dispatch check → claim → resolve `{id}` to
-// the Issue body (the plugin's job — `/implement` does not parse `{id}`) →
-// `herdr agent start` from the profile (`kind` from a minimal profile +
-// `default_profile`, model raw in `args`).
+// path. `Enter` on a selected Issue → dispatch check → claim → `herdr agent
+// start` from the profile (`kind` from a minimal profile + `default_profile`,
+// model raw in `args`) → prompt with `/implement {id}` or `/wayfinder {id}`.
+// `{id}` is the issue's identity token: the repo-relative `.md` path for the
+// local-markdown provider, the tracker's native id for any other provider. The
+// body is never embedded in the command — `/implement`/`/wayfinder` parse
+// `{id}` themselves.
 //
 // The automated run-controller (issue 14) shares the ClaimRegistry so manual and
 // automated dispatches never double-dispatch the same Issue. Everything here is
 // IO-behind-seams: a TrackerProvider (Seam 1) + the injectable herdr client (Seam 3).
 
-import { dispatch, type DispatchOutcome } from "./orchestrator.js";
+import { dispatch } from "./orchestrator.js";
 import { issueNum, trunc } from "./logic.js";
-import { AlreadyClaimed, type Issue, type IssueDetail, type TrackerProvider } from "./tracker/provider.js";
+import { AlreadyClaimed, type Issue, type TrackerProvider } from "./tracker/provider.js";
 import { HerdrClient } from "./herdr-client.js";
 import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.js";
 
@@ -34,13 +37,6 @@ export class ClaimRegistry {
   release(id: string): void {
     this.claimed.delete(id);
   }
-}
-
-/** Resolve a dispatch outcome's `{id}` to the Issue body for the agent prompt. */
-export function resolvePrompt(outcome: DispatchOutcome, detail: IssueDetail): string | null {
-  if (outcome.kind === "wayfinder") return `/wayfinder ${detail.body}`;
-  if (outcome.kind === "implement") return `/implement ${detail.body}`;
-  return null;
 }
 
 /** Short stable agent-session name for an issue (later the prompt target). */
@@ -68,10 +64,8 @@ export type DispatchResult =
   | {
       ok: true;
       issue: Issue;
-      /** The dispatchable `/implement <id>`/`/wayfinder <id>` command (id form). */
+      /** The `/implement {id}` / `/wayfinder {id}` prompt sent to the agent. */
       command: string;
-      /** The full prompt sent to the agent (the body resolved into the command). */
-      prompt: string;
       paneId: string;
       kind: string;
       args: string[];
@@ -83,26 +77,22 @@ export class DispatchCoordinator {
 
   /**
    * Manual dispatch of one Issue: check dispatchability first (never claim a
-   * human turn), take the shared claim mutex, then claim on the tracker, read
-   * the body to resolve `{id}`, and drive herdr: tab → agent start (profile
-   * kind + raw args) → prompt. On `{id}`→body resolution failures nothing is
-   * claimed; on a claim refusal the mutex is freed for a retry.
+   * human turn), take the shared claim mutex, then claim on the tracker, and
+   * drive herdr: tab → agent start (profile kind + raw args) → prompt with the
+   * `/implement {id}` / `/wayfinder {id}` command. On a claim refusal the
+   * mutex is freed for a retry.
    */
   async dispatchIssue(issue: Issue): Promise<DispatchResult> {
     const outcome = dispatch(issue);
     if (outcome.kind !== "implement" && outcome.kind !== "wayfinder") {
       return { ok: false, issue, command: null, reason: "not-dispatchable" };
     }
+    const command = outcome.command;
     if (!this.deps.claims.tryClaim(issue.id)) {
-      return { ok: false, issue, command: outcome.command, reason: "already-dispatched" };
+      return { ok: false, issue, command, reason: "already-dispatched" };
     }
     try {
       const claimed = await this.deps.provider.claim(issue.id);
-      const detail = await this.deps.provider.readIssue(issue.id);
-      const prompt = resolvePrompt(outcome, detail);
-      if (prompt === null) {
-        return { ok: false, issue, command: outcome.command, reason: "not-dispatchable" };
-      }
       const profile = resolveProfile(this.deps.profiles, profileKeyFor(issue));
       const name = sessionNameFor(issue.id);
       const { paneId } = await this.deps.client.createTab({
@@ -111,13 +101,13 @@ export class DispatchCoordinator {
         focus: false,
       });
       await this.deps.client.startAgent({ name, kind: profile.kind, pane: paneId, args: profile.args });
-      await this.deps.client.prompt(name, prompt, paneId);
-      return { ok: true, issue: claimed, command: outcome.command, prompt, paneId, kind: profile.kind, args: profile.args };
+      await this.deps.client.prompt(name, command, paneId);
+      return { ok: true, issue: claimed, command, paneId, kind: profile.kind, args: profile.args };
     } catch (e) {
       if (e instanceof AlreadyClaimed) {
         // We never took the claim — free the mutex so a later dispatch can retry.
         this.deps.claims.release(issue.id);
-        return { ok: false, issue, command: outcome.command, reason: "already-claimed" };
+        return { ok: false, issue, command, reason: "already-claimed" };
       }
       // Any later failure: the tracker-side claim stands (claim before work is
       // the mutex contract), so the in-session gate stays held with it.

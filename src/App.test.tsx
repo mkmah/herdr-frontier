@@ -236,9 +236,9 @@ describe("App (initial render smoke — two-pane shell)", () => {
     await setup.flush();
     const frame = setup.captureCharFrame();
     expect(frame).toContain("dispatch:");
-    // `{id}` is resolved to the Issue body in the shown command — the pane
-    // previews exactly what the agent will receive, not the `{id}` form.
-    expect(frame).toContain("/implement Build the driver.");
+    // `{id}` resolves to the issue's identity — the repo-relative .md path for
+    // local-markdown — which is exactly the command the agent receives.
+    expect(frame).toContain("/implement .scratch/herdr-beads/issues/12-driver.md");
     setup.renderer.destroy();
   });
 

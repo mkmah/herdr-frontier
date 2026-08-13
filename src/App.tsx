@@ -30,7 +30,6 @@ import {
 import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./display.js";
 import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
 import { dispatch } from "./orchestrator.js";
-import { resolvePrompt } from "./dispatch.js";
 import type { DispatchCoordinator } from "./dispatch.js";
 
 export interface AppProps {
@@ -371,10 +370,6 @@ export const App: Component<AppProps> = (props) => {
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
                 const outcome = dispatch(sel);
                 const dispatchable = outcome.kind === "implement" || outcome.kind === "wayfinder";
-                // The dispatch command the agent will actually receive — `{id}`
-                // resolved to the Issue body (its own `/implement`/`/wayfinder`
-                // do not parse `{id}`, CONTEXT.md; issue 12 what-to-build).
-                const resolvedPrompt = dispatchable && loaded ? resolvePrompt(outcome, detailRec!) : null;
                 const ds = dispatchState();
                 const showDispatch = ds.status !== "idle" && ds.issueId === sel.id;
                 return (
@@ -401,7 +396,7 @@ export const App: Component<AppProps> = (props) => {
                         fg={dispatchable ? THEME.state.done : THEME.state.human}
                         attributes={TextAttributes.BOLD}
                       >
-                        {resolvedPrompt ?? (dispatchable ? outcome.command : "(no auto-dispatch — human turn)")}
+                        {dispatchable ? outcome.command : "(no auto-dispatch — human turn)"}
                       </text>
                     </box>
                     <text fg={THEME.text.dimmer}>{""}</text>

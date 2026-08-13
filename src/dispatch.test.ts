@@ -1,7 +1,9 @@
 // Dispatch-flow tests (issue 12 acceptance): the manual single-issue dispatch.
 //
-//   `Enter` → claim (mutex) → resolve `{id}` to the Issue body → build the
-//   `agent start` vector from the profile → run it.
+//   `Enter` → claim (mutex) → build the `agent start` vector from the profile
+//   → prompt the agent with `/implement {id}` (`{id}` = the issue's identity:
+//   the repo-relative `.md` path for local-markdown, the tracker's native id for
+//   other providers).
 //
 // Seam 1 + 3 together: a FakeTrackerProvider (in-memory, mirrors the contract
 // incl. AlreadyClaimed) and a recording fixture runner (no live herdr). The
@@ -16,12 +18,10 @@ import {
   type IssueDetail,
   type TrackerProvider,
 } from "./tracker/provider.js";
-import { dispatch } from "./orchestrator.js";
 import { HerdrClient, type HerdrRunner } from "./herdr-client.js";
 import {
   ClaimRegistry,
   DispatchCoordinator,
-  resolvePrompt,
 } from "./dispatch.js";
 import type { ProfilesConfig } from "./profiles.js";
 
@@ -108,27 +108,12 @@ function harness(issues: IssueDetail[]) {
     "api schema --json": SCHEMA,
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
     "agent start #12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5": ok({}),
-    [`agent prompt #12 /implement ${BODY}`]: ok({}),
+    [`agent prompt #12 /implement ${ID}`]: ok({}),
   });
   const client = new HerdrClient({ runner });
   const coordinator = new DispatchCoordinator({ client, provider, profiles: PROFILES, claims, cwd: CWD });
   return { provider, claims, calls, coordinator };
 }
-
-describe("resolvePrompt", () => {
-  it("resolves {id} to the issue body for /implement and /wayfinder", () => {
-    const impl = dispatch(mk({ labels: ["ready-for-agent"] }));
-    expect(resolvePrompt(impl, mk())).toBe(`/implement ${BODY}`);
-
-    const wf = dispatch(mk({ labels: ["wayfinder:research"], type: "research" }));
-    expect(resolvePrompt(wf, mk())).toBe(`/wayfinder ${BODY}`);
-  });
-
-  it("is null for human turns and non-dispatched issues", () => {
-    expect(resolvePrompt(dispatch(mk({ labels: ["ready-for-human"] })), mk())).toBeNull();
-    expect(resolvePrompt(dispatch(mk({ labels: ["wayfinder:map"] })), mk())).toBeNull();
-  });
-});
 
 describe("ClaimRegistry (the shared claim mutex)", () => {
   it("grants one claim and refuses the second until released", () => {
@@ -141,14 +126,15 @@ describe("ClaimRegistry (the shared claim mutex)", () => {
 });
 
 describe("DispatchCoordinator.dispatchIssue", () => {
-  it("claims, resolves the body, builds the agent-start vector from the profile, and prompts", async () => {
+  it("claims, prompts with /implement {id} (the issue's identity), and builds the agent-start vector from the profile", async () => {
     const h = harness([mk()]);
     const result = await h.coordinator.dispatchIssue(mk());
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // For local-markdown `{id}` is the repo-relative .md path — the same id the
+    // agent (via /implement) resolves. The body is never embedded.
     expect(result.command).toBe(`/implement ${ID}`);
-    expect(result.prompt).toBe(`/implement ${BODY}`);
     expect(result.kind).toBe("opencode");
     expect(result.args).toEqual(["-m", "claude-sonnet-4-5"]);
     expect(result.paneId).toBe("wZ:p3");
@@ -156,13 +142,13 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     // The issue was claimed before dispatch — the provider record reflects it.
     expect((await h.provider.readIssue(ID)).status).toBe("claimed");
 
-    // The herdr invocations: tab → agent start → (lazy schema introspection at
-    // first prompt) → prompt, in schema-driven order (start detects kind).
+    // The herdr invocations: tab → agent start → (lazy schema introspection, at
+    // first start-agent) → prompt, in schema-driven order.
     expect(h.calls.map((c) => c.join(" "))).toEqual([
       "tab create --cwd /repo --label 12 — Driver --no-focus",
       "api schema --json",
       "agent start #12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5",
-      "agent prompt #12 /implement ## What to build\n\nA herdr driver with an injectable runner.",
+      `agent prompt #12 /implement ${ID}`,
     ]);
   });
 
