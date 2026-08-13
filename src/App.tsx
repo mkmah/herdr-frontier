@@ -164,6 +164,20 @@ export const App: Component<AppProps> = (props) => {
   const listInnerW = () => Math.max(0, listPaneW() - 4); // 2 border + 2 padding
   const detailInnerW = () => Math.max(0, detailPaneW() - 4);
 
+  // Key for the detail pane's content. Includes the selection, whether the body
+  // read has landed (L/P/E), and the pane width (for header re-truncation). A
+  // keyed <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint
+  // text or props in place, so the pane must remount when the read lands or the
+  // loaded body would never appear (same workaround as the list-row selection
+  // background and pulse).
+  const detailKey = createMemo(() => {
+    const s = selected();
+    if (!s) return null;
+    const d = detail();
+    const loaded = d && d.id === s.id;
+    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}`;
+  });
+
   const openCount = () => issues().filter((i) => i.status === "open").length;
   const yourTurn = () => issues().filter(isHumanTurn).length;
 
@@ -290,13 +304,13 @@ export const App: Component<AppProps> = (props) => {
           onMouseDown={onDetailMouseDown}
         >
           <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
-            <Show when={selected()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
-              {(sel: Issue) => {
+            <Show when={detailKey()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
+              {() => {
+                const sel = selected();
+                if (!sel) return null;
                 const detailRec = detail();
-                // A detail record is only valid for the issue it was read for.
-                // If the selection moved on, treat it as absent so the stale
-                // body can never paint under a different title.
-                const body = detailRec && detailRec.id === sel.id ? detailRec.body : null;
+                const loaded = detailRec && detailRec.id === sel.id;
+                const body = loaded ? detailRec.body : null;
                 const ic = iconFor(sel, resolvedFor(sel));
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
                 return (
@@ -318,9 +332,11 @@ export const App: Component<AppProps> = (props) => {
                       {`blocked by: ${sel.blockedBy.length ? sel.blockedBy.join(", ") : "—"}    agent: ${sel.assignee ?? "unclaimed"}${sel.tasks ? `    tasks: ${sel.tasks.done}/${sel.tasks.total}` : ""}${sel.updatedAt != null ? `    ${humanizeAge(sel.updatedAt, Date.now())} ago` : ""}`}
                     </RoleText>
                     <text fg={THEME.text.dimmer}>{""}</text>
-                    <RoleText role="body">
-                      {body ?? (!detailLoading() ? "" : " loading body…")}
-                    </RoleText>
+                    {loaded ? (
+                      <RoleText role="body">{body}</RoleText>
+                    ) : (
+                      <RoleText role="body">{detailLoading() ? " loading body…" : ""}</RoleText>
+                    )}
                   </box>
                 );
               }}
