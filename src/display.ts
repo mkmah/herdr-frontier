@@ -6,15 +6,13 @@
 // thin render layer over these functions; colors live in ./theme.ts.
 
 import type { Issue } from "./tracker/provider.js";
-import { triageOf } from "./logic.js";
+import { HUMAN_ROLES, triageOf } from "./logic.js";
 
 /** List state, resolved per `Issue` (prototype 06's four-state model). */
 export type ListState = "done" | "running" | "blocked" | "frontier";
 
 /** Which pane has keyboard focus. */
 export type Focus = "list" | "detail";
-
-const HUMAN_ROLES: ReadonlySet<string> = new Set(["ready-for-human", "needs-info", "needs-triage"]);
 
 /** True when the issue needs a human: `ready-for-human` / `needs-info` / `needs-triage`. */
 export function isHumanTurn(issue: Issue): boolean {

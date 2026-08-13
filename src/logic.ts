@@ -26,11 +26,25 @@ export function effortOf(id: string): string {
   return parts[1] ?? "(ungrouped)";
 }
 
+/** The canonical labels that mean "a human must look at this" (CONTEXT.md: attention). */
+export const HUMAN_ROLES: ReadonlySet<string> = new Set(["ready-for-human", "needs-info", "needs-triage"]);
+
+/** The leading decimal digits of an id's filename, or null when it has none. */
+function numPrefixRaw(id: string): string | null {
+  const file = id.split("/").pop() ?? id;
+  return file.match(/^(\d+)/)?.[1] ?? null;
+}
+
 /** Short label for an issue: the numeric prefix from its filename, else id tail. */
 export function issueNum(id: string): string {
-  const file = id.split("/").pop() ?? id;
-  const m = file.match(/^(\d+)/);
-  return m ? `#${m[1]}` : `#${file.replace(/\.md$/, "")}`;
+  const raw = numPrefixRaw(id);
+  return raw ? `#${raw}` : `#${(id.split("/").pop() ?? id).replace(/\.md$/, "")}`;
+}
+
+/** The leading decimal number in an id's filename, else max (sorts last). */
+export function issueNumber(id: string): number {
+  const raw = numPrefixRaw(id);
+  return raw ? parseInt(raw, 10) : Number.MAX_SAFE_INTEGER;
 }
 
 /** The triage role label for an issue (first non-wayfinder label, else needs-triage). */
