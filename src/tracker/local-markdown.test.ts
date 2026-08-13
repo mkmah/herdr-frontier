@@ -206,7 +206,9 @@ describe("round-trip: serializeIssue → readIssue → listIssues", () => {
 
     const p = new LocalMarkdownProvider({ repoRoot: root });
     const listed = (await p.listIssues())[0]!;
-    expect(listed).toEqual(original);
+    expect(listed).toEqual(expect.objectContaining(original));
+    expect(typeof listed.updatedAt).toBe("number");
+    expect(listed.tasks).toBeUndefined(); // no checkboxes in the file
 
     const detail: IssueDetail = await p.readIssue(original.id);
     expect(detail.title).toBe(original.title);
@@ -230,5 +232,42 @@ describe("round-trip: serializeIssue → readIssue → listIssues", () => {
       ".scratch/herdr-beads/issues/09-bare.md",
     );
     expect(detail.body).toBe("");
+  });
+});
+
+describe("display scalars: tasks tally + updatedAt", () => {
+  it("tallies acceptance-criteria checkboxes into tasks and stamps updatedAt (mtime)", async () => {
+    await writeIssue(
+      "herdr-beads",
+      "10-shell.md",
+      [
+        "# 10 — Two-pane shell",
+        "",
+        "Status: open",
+        "Type: task",
+        "Labels: ready-for-agent",
+        "Blocked by: —",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [x] Two-pane layout holds",
+        "- [x] j/k move the cursor",
+        "- [ ] Selected row highlights",
+      ].join("\n"),
+    );
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.tasks).toEqual({ done: 2, total: 3 });
+    expect(typeof issue.updatedAt).toBe("number");
+
+    const detail = await new LocalMarkdownProvider({ repoRoot: root }).readIssue(issue.id);
+    expect(detail.tasks).toEqual({ done: 2, total: 3 });
+    expect(typeof detail.updatedAt).toBe("number");
+  });
+
+  it("omits tasks entirely when the file has no checkboxes", async () => {
+    await writeIssue("herdr-beads", "09-plugin.md", "# 09 — Plugin\n\nStatus: open\nLabels: ready-for-agent\nBlocked by: —\n");
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.tasks).toBeUndefined();
+    expect(typeof issue.updatedAt).toBe("number");
   });
 });

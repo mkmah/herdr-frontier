@@ -31,6 +31,7 @@ import {
   type IssueFilter,
   type IssueStatus,
   type IssueType,
+  type TaskTally,
   type TrackerProvider,
   IssueNotFound,
 } from "./provider.js";
@@ -57,9 +58,9 @@ export class LocalMarkdownProvider implements TrackerProvider {
   async listIssues(filter?: IssueFilter): Promise<Issue[]> {
     const files = await this.scanIssueFiles();
     const issues: Issue[] = [];
-    for (const abs of files) {
+    for (const { abs, updatedAt } of files) {
       const content = await readFile(abs, "utf8");
-      issues.push(parseIssue(content, this.idOf(abs)));
+      issues.push(parseIssue(content, this.idOf(abs), { updatedAt, tasks: tallyTasks(content) }));
     }
     return filter ? issues.filter((i) => matchesFilter(i, filter)) : issues;
   }
@@ -68,7 +69,8 @@ export class LocalMarkdownProvider implements TrackerProvider {
     const abs = join(this.repoRoot, ...id.split("/"));
     try {
       const content = await readFile(abs, "utf8");
-      return parseDetail(content, id);
+      const st = await stat(abs);
+      return parseDetail(content, id, { updatedAt: st.mtimeMs, tasks: tallyTasks(content) });
     } catch {
       throw new IssueNotFound(id);
     }
@@ -100,8 +102,11 @@ export class LocalMarkdownProvider implements TrackerProvider {
     return toPosix(relative(this.repoRoot, absPath));
   }
 
-  /** Recursively collect `<repoRoot>/.scratch/<effort>/issues/<file>.md`. */
-  private async scanIssueFiles(): Promise<string[]> {
+  /**
+   * Recursively collect `<repoRoot>/.scratch/<effort>/issues/<file>.md`, each
+   * with its last-modified time (the row's age source).
+   */
+  private async scanIssueFiles(): Promise<{ abs: string; updatedAt: number }[]> {
     const scratchDir = join(this.repoRoot, SCRATCH_DIR);
     let efforts;
     try {
@@ -109,7 +114,7 @@ export class LocalMarkdownProvider implements TrackerProvider {
     } catch {
       return []; // no .scratch → no issues
     }
-    const out: string[] = [];
+    const out: { abs: string; updatedAt: number }[] = [];
     for (const entry of efforts) {
       if (!entry.isDirectory()) continue;
       const issuesDir = join(scratchDir, entry.name, ISSUES_DIR);
@@ -122,10 +127,11 @@ export class LocalMarkdownProvider implements TrackerProvider {
       for (const f of entries) {
         if (!f.endsWith(MD_EXT)) continue;
         const abs = join(issuesDir, f);
-        if ((await stat(abs)).isFile()) out.push(abs);
+        const st = await stat(abs);
+        if (st.isFile()) out.push({ abs, updatedAt: st.mtimeMs });
       }
     }
-    return out.sort();
+    return out.sort((a, b) => a.abs.localeCompare(b.abs));
   }
 }
 
@@ -153,8 +159,31 @@ interface Frontmatter {
   bodyStart: number; // line index where the body begins
 }
 
+/** Display-only scalars the record carries so the UI needn't re-parse files. */
+interface DisplayMeta {
+  updatedAt?: number;
+  tasks?: TaskTally;
+}
+
+/**
+ * Tally markdown task-list checkboxes (`- [ ]` / `- [x]`) across the file —
+ * the acceptance-criteria lists in real issue files. `undefined` when the
+ * file has no checkboxes, so a tally-free issue renders no task column.
+ */
+function tallyTasks(content: string): TaskTally | undefined {
+  let done = 0;
+  let total = 0;
+  for (const line of content.split("\n")) {
+    const m = line.match(/^\s*[-*]\s+\[( |x|X)\]\s+/);
+    if (!m) continue;
+    total++;
+    if (m[1] !== " ") done++;
+  }
+  return total > 0 ? { done, total } : undefined;
+}
+
 /** Parse the leading frontmatter block (no body) into an `Issue`. */
-export function parseIssue(content: string, id: string): Issue {
+export function parseIssue(content: string, id: string, display?: DisplayMeta): Issue {
   const fm = parseFrontmatter(content, id);
   return {
     id,
@@ -164,11 +193,12 @@ export function parseIssue(content: string, id: string): Issue {
     labels: fm.labels,
     assignee: fm.assignee,
     blockedBy: fm.blockedBy,
+    ...display,
   };
 }
 
 /** Parse the full file into an `IssueDetail` (frontmatter + body). */
-export function parseDetail(content: string, id: string): IssueDetail {
+export function parseDetail(content: string, id: string, display?: DisplayMeta): IssueDetail {
   const fm = parseFrontmatter(content, id);
   const lines = content.split("\n");
   const body = lines.slice(fm.bodyStart).join("\n").trim();
@@ -182,6 +212,7 @@ export function parseDetail(content: string, id: string): IssueDetail {
     blockedBy: fm.blockedBy,
     body,
     comments: [],
+    ...display,
   };
 }
 

@@ -5,7 +5,7 @@
 // without the OpenTUI test harness (whose server renderer is one-shot and
 // non-reactive). The component is a thin render layer over these functions.
 
-import type { Issue, IssueStatus } from "./tracker/provider.js";
+import type { Issue } from "./tracker/provider.js";
 
 /** Display rows: status messages and group/issue rows, flattened for rendering. */
 export type Row =
@@ -46,22 +46,6 @@ export function triageColor(label: string): string {
   return "#5c6678";
 }
 
-export function statusColor(status: IssueStatus): string {
-  switch (status) {
-    case "open": return "#48cae4";
-    case "claimed": return "#e9b94e";
-    case "resolved": return "#4c566a";
-  }
-}
-
-export function statusGlyph(status: IssueStatus): string {
-  switch (status) {
-    case "open": return "○ ";
-    case "claimed": return "◆ ";
-    case "resolved": return "✓ ";
-  }
-}
-
 /** Sort issues by run-root then title (stable display order across reloads). */
 export function sortIssues(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) =>
@@ -97,6 +81,18 @@ export function buildRows(state: RowsState): Row[] {
     out.push({ kind: "issue", issue });
   }
   return out;
+}
+
+/**
+ * Is a blockedBy id resolved, per the loaded issue set? On the local-markdown
+ * substrate a blocker id is the numeric prefix ("10") or a full id; match on
+ * either. An id that resolves to nothing is treated as unresolved.
+ */
+export function blockerResolved(blockerId: string, issues: Issue[]): boolean {
+  const num = issueNum(blockerId);
+  return issues.some(
+    (i) => i.status === "resolved" && (i.id === blockerId || issueNum(i.id) === num),
+  );
 }
 
 /** Move a cursor by `dir` over `count` items, clamped and wrapping. */

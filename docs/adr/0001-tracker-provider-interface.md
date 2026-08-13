@@ -106,6 +106,15 @@ maps on read and write. Remote trackers' native `labels[]` are an adapter-intern
 - _Synthesize local-markdown labels from `Status:`/`Type:` (Option B)._ Rejected: still can't
   represent the 5 triage roles and couples the provider to drifting layout heuristics.
 
+## Extension (issue 10 — display data on the record)
+
+The primary shell's ghui-style rows show a sub-task ratio and an age column. Rather than
+re-parse tracker files in the UI (contradicting the materialized-record decision), the `Issue`
+record gained two **optional, display-only scalars**: `tasks?: { done, total }` (sub-task tally;
+a tracker that can't count sub-tasks omits it) and `updatedAt?: number` (last-modified epoch ms;
+every tracker has this). The 7-verb seam, the label model, and the list/zoom split are unchanged;
+this is a data-field addition inside the existing record, not a new verb or behavior.
+
 ## Consequences
 
 - The orchestrator depends only on `TrackerProvider`; adding a tracker is one new adapter, no

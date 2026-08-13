@@ -266,7 +266,7 @@ function App() {
 
   // ---- keyboard (ctrl+a never reaches here — claimed upstream) -------------
   useKeyboard((key) => {
-    if (key.name === "q" || key.name === "escape") process.exit(0);
+    if (key.name === "q" || key.name === "escape") renderer.destroy();
     else if (key.name === "tab") setFocus((f) => (f === "list" ? "detail" : "list"));
     else if (key.name === "j" || key.name === "down") move(1);
     else if (key.name === "k" || key.name === "up") move(-1);

@@ -1,12 +1,15 @@
-// Tests for the read-only Issue list (issue 09 acceptance).
+// Tests for the read-only Issue list + two-pane primary shell (issues 09 + 10).
 //
 // Two layers:
-//   - logic.test: the pure presentation logic (grouping by run-root, triage,
-//     cursor wrapping) — where the real behaviour lives.
-//   - App render smoke: a synchronous initial render (initialIssues) proving the
-//     OpenTUI component paints grouped rows. The OpenTUI test harness uses a
-//     one-shot server renderer (no reactivity, no onMount), so async loading and
-//     cursor motion are covered by logic.test, not by interaction here.
+//   - logic.test / display.test: the pure presentation logic (grouping by
+//     run-root, triage, cursor wrapping, list state, icon precedence) — where
+//     the real behaviour lives.
+//   - App render smoke: a synchronous initial render (initialIssues +
+//     initialDetail) proving the OpenTUI component paints a 40/60 two-pane shell
+//     with ghui-style rows and the detail fields. The OpenTUI test harness uses
+//     a one-shot server renderer (no reactivity, no onMount/createEffect), so
+//     async loading, cursor motion, and focus cycling are covered by the unit
+//     tests, not by interaction here.
 
 import { describe, it, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
@@ -20,7 +23,7 @@ import {
   triageOf,
   type Row,
 } from "./logic.js";
-import type { Issue, TrackerProvider } from "./tracker/provider.js";
+import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
   id: ".scratch/e/issues/01-x.md",
@@ -119,23 +122,53 @@ describe("logic: moveCursor wraps and clamps", () => {
   });
 });
 
-describe("App (initial render smoke)", () => {
-  it("paints group headers and issue titles from initialIssues", async () => {
+describe("App (initial render smoke — two-pane shell)", () => {
+  it("paints a 40/60 shell with group headers, ghui-style rows, and the detail fields", async () => {
+    const first = mk({
+      id: ".scratch/herdr-beads/issues/09-skeleton.md",
+      title: "09 — Plugin skeleton",
+      status: "claimed",
+      labels: ["ready-for-agent", "wayfinder:task"],
+      tasks: { done: 2, total: 4 },
+      updatedAt: Date.now() - 5 * 3_600_000,
+    });
+    const second = mk({
+      id: ".scratch/auth-spec/issues/22-token.md",
+      title: "22 — Token refresh",
+      labels: ["ready-for-human"],
+      blockedBy: ["21"],
+    });
+    const detail: IssueDetail = {
+      ...first,
+      body: "Build the primary shell. Blocked-by line here.",
+      comments: [],
+    };
+
     const setup = await testRender(() => (
       <App
         provider={noopProvider}
-        initialIssues={[
-          mk({ id: ".scratch/herdr-beads/issues/09-skeleton.md", title: "09 — Plugin skeleton" }),
-          mk({ id: ".scratch/auth-spec/issues/22-token.md", title: "22 — Token refresh" }),
-        ]}
+        initialIssues={[first, second]}
+        initialDetail={detail}
       />
     ));
     await setup.flush();
     const frame = setup.captureCharFrame();
+
+    // list pane: grouped rows, #id, truncated titles
     expect(frame).toContain("herdr-beads");
     expect(frame).toContain("auth-spec");
+    expect(frame).toContain("#09");
+    expect(frame).toContain("#22");
     expect(frame).toContain("Plugin skeleton");
     expect(frame).toContain("Token refresh");
+    // ghui-style: tasks ratio + age on the selected row
+    expect(frame).toContain("2/4");
+    expect(frame).toContain("5h");
+    // detail pane: labels + blocked-by + body
+    expect(frame).toContain("ready-for-agent");
+    expect(frame).toContain("wayfinder:task");
+    expect(frame).toContain("blocked by: —");
+    expect(frame).toContain("Build the primary shell");
     setup.renderer.destroy();
   });
 

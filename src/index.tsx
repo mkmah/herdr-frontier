@@ -23,7 +23,7 @@ function Root() {
   return (
     <App
       provider={new LocalMarkdownProvider({ repoRoot })}
-      onQuit={() => process.exit(0)}
+      onQuit={() => renderer.destroy()}
     />
   );
 }

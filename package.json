@@ -13,11 +13,11 @@
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@babel/core": "^7.29.0",
-    "@babel/preset-typescript": "^7.28.5",
+    "@babel/core": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
     "@opentui/core": "^0.5.1",
     "@opentui/solid": "^0.5.1",
     "babel-preset-solid": "1.9.12",

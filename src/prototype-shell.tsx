@@ -18,7 +18,7 @@
 
 import { createSignal, For, Show, onMount, onCleanup } from "solid-js";
 import { TextAttributes } from "@opentui/core";
-import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
+import { render, useKeyboard, useTerminalDimensions, useRenderer } from "@opentui/solid";
 
 // ---------------------------------------------------------------------------
 // Domain shapes
@@ -343,6 +343,7 @@ const VARIANTS = [
 // ---------------------------------------------------------------------------
 
 function App() {
+  const renderer = useRenderer();
   const [vIdx, setVIdx] = createSignal(0);
   const [focused, setFocused] = createSignal("runs");
   const [detailId, setDetailId] = createSignal("06");
@@ -382,7 +383,7 @@ function App() {
 
   useKeyboard((key) => {
     const s = key.sequence;
-    if (key.name === "q" || key.name === "escape") process.exit(0);
+    if (key.name === "q" || key.name === "escape") renderer.destroy();
     else if (s === "[" || s === "1") switchVariant(-1);
     else if (s === "]" || s === "2") switchVariant(1);
     else if (s === "3") { setVIdx(2); setFocused(VARIANTS[2].regions[0]); }

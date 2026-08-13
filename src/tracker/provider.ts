@@ -29,6 +29,16 @@ export interface Issue {
   assignee: string | null;
   /** ids this issue waits on. */
   blockedBy: string[];
+  /** Sub-task tally for the row's progress column (ghui-style display). */
+  tasks?: TaskTally;
+  /** Last-modified epoch ms — drives the row/detail age column. */
+  updatedAt?: number;
+}
+
+/** Count of done vs total sub-tasks on an issue (e.g. markdown checkboxes). */
+export interface TaskTally {
+  done: number;
+  total: number;
 }
 
 /** Zoom record — full body + history, only from `readIssue`. */
