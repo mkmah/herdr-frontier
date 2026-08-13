@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, type Component } from "solid-js";
-import { TextAttributes } from "@opentui/core";
+import { MouseButton, TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import {
@@ -103,6 +103,27 @@ export const App: Component<AppProps> = (props) => {
     setCursor((c) => moveCursor(c, dir, issues().length));
   }
 
+  // --- mouse support (prototype 08's behavior, applied to the real shell) ---
+  // Click a row = select + focus the list. Wheel over the list = move the
+  // cursor. Click the detail pane = focus detail. (Launch is double-click slot
+  // in the prototypes; real launch lands with the driver, issue 12.)
+  function selectById(id: string) {
+    const idx = issues().findIndex((i) => i.id === id);
+    if (idx >= 0) setCursor(idx);
+  }
+  function onRowMouseDown(e: MouseEvent, id: string) {
+    if (e.button !== MouseButton.LEFT) return;
+    setFocus("list");
+    selectById(id);
+  }
+  function onListWheel(e: MouseEvent) {
+    if (e.button === MouseButton.WHEEL_UP) move(-1);
+    else if (e.button === MouseButton.WHEEL_DOWN) move(1);
+  }
+  function onDetailMouseDown(e: MouseEvent) {
+    if (e.button === MouseButton.LEFT) setFocus("detail");
+  }
+
   useKeyboard((key) => {
     if (key.name === "q" || key.name === "escape") (props.onQuit ?? (() => renderer.destroy()))();
     else if (key.name === "tab") setFocus((f) => cycleFocus(f));
@@ -111,19 +132,29 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "r") void load();
   });
 
-  // Load the selected Issue's full body whenever the selection changes.
+  // Load the selected Issue's full body whenever the selection changes. Each
+  // read is guarded by the requested id: a read that resolves after a newer one
+  // was requested (fast cursor moves) is discarded so the detail pane can never
+  // show a body that doesn't match the selected title.
   let loadedDetailId: string | null = null;
   createEffect(() => {
     const sel = selected();
     if (!sel || props.initialDetail || sel.id === loadedDetailId) return;
     loadedDetailId = sel.id;
+    const wantedId = sel.id;
     setDetail(null);
     setDetailLoading(true);
     void props.provider
-      .readIssue(sel.id)
-      .then((d) => setDetail(d))
-      .catch(() => setDetail(null))
-      .finally(() => setDetailLoading(false));
+      .readIssue(wantedId)
+      .then((d) => {
+        if (selected()?.id === wantedId) setDetail(d);
+      })
+      .catch(() => {
+        if (selected()?.id === wantedId) setDetail(null);
+      })
+      .finally(() => {
+        if (selected()?.id === wantedId) setDetailLoading(false);
+      });
   });
 
   // Widths. Both panes are definite — list 40%, detail 60% — so content can't
@@ -140,7 +171,7 @@ export const App: Component<AppProps> = (props) => {
   // Selection is a full-row background; a keyed <Show> remounts the row when
   // selection/pulse/width change so the backgroundColor applies (function
   // accessors aren't applied reactively for this prop in OpenTUI 0.5.1).
-  const IssueRow: Component<{ issue: Issue; selected: boolean; innerW: number }> = (p) => {
+  const IssueRow: Component<{ issue: Issue; selected: boolean; innerW: number; onMouseDown: (e: MouseEvent) => void }> = (p) => {
     const key = () => `${p.selected ? 1 : 0}|${pulse() ? 1 : 0}|${p.innerW}`;
     return (
       <Show when={key()} keyed>
@@ -161,6 +192,7 @@ export const App: Component<AppProps> = (props) => {
               paddingLeft={1}
               paddingRight={1}
               backgroundColor={p.selected ? THEME.selBg : undefined}
+              onMouseDown={p.onMouseDown}
             >
               <text
                 fg={iconColor(ic.state, pulse())}
@@ -214,7 +246,7 @@ export const App: Component<AppProps> = (props) => {
           title=" Issues "
           titleColor={focus() === "list" ? THEME.border.focused : THEME.text.dim}
         >
-          <scrollbox flexGrow={1} scrollY={true}>
+          <scrollbox flexGrow={1} scrollY={true} onMouseScroll={onListWheel}>
             <For each={rows()}>
               {(row) => {
                 switch (row.kind) {
@@ -231,7 +263,12 @@ export const App: Component<AppProps> = (props) => {
                     );
                   case "issue":
                     return (
-                      <IssueRow issue={row.issue} selected={selected()?.id === row.issue.id} innerW={listInnerW()} />
+                      <IssueRow
+                        issue={row.issue}
+                        selected={selected()?.id === row.issue.id}
+                        innerW={listInnerW()}
+                        onMouseDown={(e: MouseEvent) => onRowMouseDown(e, row.issue.id)}
+                      />
                     );
                 }
               }}
@@ -250,6 +287,7 @@ export const App: Component<AppProps> = (props) => {
           borderColor={focus() === "detail" ? THEME.border.focused : THEME.border.idle}
           title={selected() ? ` ${issueNum(selected()!.id)} ` : " Detail "}
           titleColor={focus() === "detail" ? THEME.border.focused : THEME.text.dim}
+          onMouseDown={onDetailMouseDown}
         >
           <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
             <Show when={selected()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
