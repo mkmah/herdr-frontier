@@ -36,16 +36,23 @@ export function listStateOf(issue: Issue, isResolved: (id: string) => boolean): 
 }
 
 /**
- * The state glyph for a row. Icon precedence (locked in prototype 06):
- * done `✓` > human `☻` > running `⟳` > blocked `✗` > frontier `○`.
+ * The state glyph for a row, plus the state it resolved to (so the theme can
+ * color it with a plain stateColor lookup — the precedence lives here once).
+ * Icon precedence (locked in prototype 06): done `✓` > human `☻` > running
+ * `⟳` > blocked `✗` > frontier `○`.
  */
-export function iconFor(issue: Issue, isResolved: (id: string) => boolean): string {
+export interface IssueIcon {
+  glyph: string;
+  state: ListState | "human";
+}
+
+export function iconFor(issue: Issue, isResolved: (id: string) => boolean): IssueIcon {
   const s = listStateOf(issue, isResolved);
-  if (s === "done") return "✓";
-  if (isHumanTurn(issue)) return "☻";
-  if (s === "running") return "⟳";
-  if (s === "blocked") return "✗";
-  return "○";
+  if (s === "done") return { glyph: "✓", state: "done" };
+  if (isHumanTurn(issue)) return { glyph: "☻", state: "human" };
+  if (s === "running") return { glyph: "⟳", state: "running" };
+  if (s === "blocked") return { glyph: "✗", state: "blocked" };
+  return { glyph: "○", state: "frontier" };
 }
 
 /**

@@ -38,14 +38,6 @@ export function triageOf(issue: Issue): string {
   return issue.labels.find((l) => !l.startsWith("wayfinder:")) ?? "needs-triage";
 }
 
-export function triageColor(label: string): string {
-  if (label === "ready-for-agent") return "#48cae4";
-  if (label === "ready-for-human") return "#f8961e";
-  if (label === "needs-info" || label === "needs-triage") return "#bb9af7";
-  if (label === "wontfix") return "#ef476f";
-  return "#5c6678";
-}
-
 /** Sort issues by run-root then title (stable display order across reloads). */
 export function sortIssues(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) =>
@@ -84,14 +76,18 @@ export function buildRows(state: RowsState): Row[] {
 }
 
 /**
- * Is a blockedBy id resolved, per the loaded issue set? On the local-markdown
- * substrate a blocker id is the numeric prefix ("10") or a full id; match on
- * either. An id that resolves to nothing is treated as unresolved.
+ * Is a blockedBy id resolved for `issue`, per the loaded issue set? A blocker id
+ * is matched as a full id first, else by its numeric prefix — but only against
+ * issues in the same effort directory, so `"05"` in two efforts can't resolve
+ * each other's blockers. An id that resolves to nothing is unresolved.
  */
-export function blockerResolved(blockerId: string, issues: Issue[]): boolean {
+export function blockerResolved(blockerId: string, issue: Issue, issues: Issue[]): boolean {
+  const exact = issues.find((i) => i.id === blockerId);
+  if (exact) return exact.status === "resolved";
   const num = issueNum(blockerId);
+  const effort = effortOf(issue.id);
   return issues.some(
-    (i) => i.status === "resolved" && (i.id === blockerId || issueNum(i.id) === num),
+    (i) => i.status === "resolved" && effortOf(i.id) === effort && issueNum(i.id) === num,
   );
 }
 

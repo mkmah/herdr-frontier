@@ -14,7 +14,7 @@ import {
   listStateOf,
   type ListState,
 } from "./display.js";
-import { iconColorFor, stateColor } from "./theme.js";
+import { iconColor, stateColor, triageColor } from "./theme.js";
 import { blockerResolved } from "./logic.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
@@ -73,21 +73,27 @@ describe("isHumanTurn", () => {
 
 describe("iconFor precedence: done > human > running > blocked > frontier", () => {
   const resolved = () => false;
+  const glyph = (issue: Issue) => iconFor(issue, resolved).glyph;
   it("shows ✓ for a resolved issue", () => {
-    expect(iconFor(mk({ status: "resolved", labels: ["ready-for-human"] }), resolved)).toBe("✓");
+    expect(glyph(mk({ status: "resolved", labels: ["ready-for-human"] }))).toBe("✓");
   });
   it("shows ☻ for a human turn, beating running and blocked", () => {
-    expect(iconFor(mk({ status: "claimed", labels: ["ready-for-human"] }), resolved)).toBe("☻");
-    expect(iconFor(mk({ labels: ["needs-info"], blockedBy: ["05"] }), resolved)).toBe("☻");
+    expect(glyph(mk({ status: "claimed", labels: ["ready-for-human"] }))).toBe("☻");
+    expect(glyph(mk({ labels: ["needs-info"], blockedBy: ["05"] }))).toBe("☻");
   });
   it("shows ⟳ for a claimed agent issue", () => {
-    expect(iconFor(mk({ status: "claimed" }), resolved)).toBe("⟳");
+    expect(glyph(mk({ status: "claimed" }))).toBe("⟳");
   });
   it("shows ✗ for a blocked open issue", () => {
-    expect(iconFor(mk({ blockedBy: ["05"] }), resolved)).toBe("✗");
+    expect(glyph(mk({ blockedBy: ["05"] }))).toBe("✗");
   });
   it("shows ○ for a frontier issue", () => {
-    expect(iconFor(mk(), resolved)).toBe("○");
+    expect(glyph(mk())).toBe("○");
+  });
+  it("resolves the icon state so the theme can color it", () => {
+    expect(iconFor(mk({ status: "resolved" }), resolved).state).toBe("done");
+    expect(iconFor(mk(), resolved).state).toBe("frontier");
+    expect(iconFor(mk({ labels: ["ready-for-human"] }), resolved).state).toBe("human");
   });
 });
 
@@ -119,18 +125,24 @@ describe("blockerResolved", () => {
     mk({ id: ".scratch/herdr-beads/issues/05-iface.md", status: "resolved" }),
     mk({ id: ".scratch/herdr-beads/issues/06-prototype.md", status: "open" }),
   ];
-  it("matches a blocker by numeric prefix and by full id", () => {
-    expect(blockerResolved("05", issues)).toBe(true);
-    expect(blockerResolved(".scratch/herdr-beads/issues/05-iface.md", issues)).toBe(true);
+  const ref = mk(); // .scratch/herdr-beads/issues/10-shell.md — same effort as the fixture
+  it("matches a blocker by numeric prefix and by full id, within the same effort", () => {
+    expect(blockerResolved("05", ref, issues)).toBe(true);
+    expect(blockerResolved(".scratch/herdr-beads/issues/05-iface.md", ref, issues)).toBe(true);
   });
   it("is false for an open or unknown blocker", () => {
-    expect(blockerResolved("06", issues)).toBe(false);
-    expect(blockerResolved("99", issues)).toBe(false);
+    expect(blockerResolved("06", ref, issues)).toBe(false);
+    expect(blockerResolved("99", ref, issues)).toBe(false);
+  });
+  it("scopes numeric prefixes to the referencing issue's effort", () => {
+    const other = mk({ id: ".scratch/other-effort/issues/05-elsewhere.md", status: "resolved" });
+    const crossRef = mk({ id: ".scratch/other-effort/issues/10-cross.md" });
+    expect(blockerResolved("05", crossRef, issues)).toBe(false); // a foreign effort's resolved "05" does not match
+    expect(blockerResolved("05", crossRef, [...issues, other])).toBe(true); // its own effort's "05" does
   });
 });
 
-describe("theme: stateColor + iconColorFor", () => {
-  const resolved = () => false;
+describe("theme: stateColor + iconColor + triageColor", () => {
   it("maps every state key to the locked palette", () => {
     expect(stateColor("done")).toBe("#06d6a0");
     expect(stateColor("running")).toBe("#e9b94e");
@@ -138,12 +150,21 @@ describe("theme: stateColor + iconColorFor", () => {
     expect(stateColor("frontier")).toBe("#48cae4");
     expect(stateColor("human")).toBe("#f8961e");
   });
-  it("colors the icon by the same precedence as the glyph", () => {
-    expect(iconColorFor(mk({ status: "resolved" }), resolved, false)).toBe("#06d6a0");
-    expect(iconColorFor(mk({ status: "claimed" }), resolved, false)).toBe("#e9b94e");
-    expect(iconColorFor(mk({ blockedBy: ["x"] }), resolved, false)).toBe("#ef476f");
-    expect(iconColorFor(mk(), resolved, false)).toBe("#48cae4");
-    expect(iconColorFor(mk({ labels: ["ready-for-human"] }), resolved, false)).toBe("#f8961e");
-    expect(iconColorFor(mk({ labels: ["ready-for-human"] }), resolved, true)).toBe("#ffd166");
+  it("colors the icon by its resolved state, with a human pulse phase", () => {
+    expect(iconColor("done", false)).toBe("#06d6a0");
+    expect(iconColor("running", false)).toBe("#e9b94e");
+    expect(iconColor("blocked", false)).toBe("#ef476f");
+    expect(iconColor("frontier", false)).toBe("#48cae4");
+    expect(iconColor("human", false)).toBe("#f8961e");
+    expect(iconColor("human", true)).toBe("#ffd166");
+  });
+  it("maps triage labels onto the palette, wayfinder to brand", () => {
+    expect(triageColor("ready-for-agent")).toBe("#48cae4");
+    expect(triageColor("ready-for-human")).toBe("#f8961e");
+    expect(triageColor("needs-info")).toBe("#bb9af7");
+    expect(triageColor("needs-triage")).toBe("#bb9af7");
+    expect(triageColor("wontfix")).toBe("#ef476f");
+    expect(triageColor("wayfinder:map")).toBe("#7aa2f7");
+    expect(triageColor("unknown")).toBe("#5c6678");
   });
 });

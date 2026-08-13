@@ -25,11 +25,10 @@ import {
   issueNum,
   moveCursor,
   sortIssues,
-  triageColor,
   trunc,
 } from "./logic.js";
 import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./display.js";
-import { iconColorFor, THEME, stateColor } from "./theme.js";
+import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
 
 export interface AppProps {
   provider: TrackerProvider;
@@ -41,15 +40,11 @@ export interface AppProps {
   onQuit?: () => void;
 }
 
-/** Chip background for a canonical label: triage roles use the triage palette. */
-function chipColor(label: string): string {
-  return label.startsWith("wayfinder:") ? THEME.accent.brand : triageColor(label);
-}
-
+/** Chip background for a canonical label — wayfinder → brand, else the triage palette. */
 function Chip(props: { label: string }) {
   return (
-    <box backgroundColor={chipColor(props.label)} paddingLeft={1} paddingRight={1} marginRight={1}>
-      <text fg="#11151c" attributes={TextAttributes.BOLD}>{props.label}</text>
+    <box backgroundColor={triageColor(props.label)} paddingLeft={1} paddingRight={1} marginRight={1}>
+      <text fg={THEME.surface.onAccent} attributes={TextAttributes.BOLD}>{props.label}</text>
     </box>
   );
 }
@@ -100,8 +95,9 @@ export const App: Component<AppProps> = (props) => {
   const selected = () => issues()[cursor()];
   const pulse = () => tick() === 1;
 
-  // A blocker id ("10") resolves against the loaded issue set by number or full id.
-  const isResolved = (id: string) => blockerResolved(id, issues());
+  // A blocker id ("10") resolves against the loaded issue set, scoped to the
+  // referencing issue's effort so `"05"` in two efforts can't cross-match.
+  const resolvedFor = (issue: Issue) => (id: string) => blockerResolved(id, issue, issues());
 
   function move(dir: number) {
     setCursor((c) => moveCursor(c, dir, issues().length));
@@ -130,9 +126,10 @@ export const App: Component<AppProps> = (props) => {
       .finally(() => setDetailLoading(false));
   });
 
-  // Widths. List pane is a definite 40%; everything else is the inner width.
+  // Widths. Both panes are definite — list 40%, detail 60% — so content can't
+  // push the split around; flexGrow absorbs only a column of rounding slack.
   const listPaneW = () => Math.max(0, Math.floor(dims().width * 0.4));
-  const detailPaneW = () => Math.max(0, dims().width - listPaneW() - 2);
+  const detailPaneW = () => Math.max(0, Math.floor(dims().width * 0.6));
   const listInnerW = () => Math.max(0, listPaneW() - 4); // 2 border + 2 padding
   const detailInnerW = () => Math.max(0, detailPaneW() - 4);
 
@@ -149,7 +146,8 @@ export const App: Component<AppProps> = (props) => {
       <Show when={key()} keyed>
         {() => {
           const issue = p.issue;
-          const human = isHumanTurn(issue);
+          const ic = iconFor(issue, resolvedFor(issue));
+          const human = ic.state === "human";
           const idStr = issueNum(issue.id);
           const tasksStr = issue.tasks ? `${issue.tasks.done}/${issue.tasks.total}` : "";
           const tasksDone = !!issue.tasks && issue.tasks.done >= issue.tasks.total;
@@ -165,11 +163,11 @@ export const App: Component<AppProps> = (props) => {
               backgroundColor={p.selected ? THEME.selBg : undefined}
             >
               <text
-                fg={iconColorFor(issue, isResolved, pulse())}
+                fg={iconColor(ic.state, pulse())}
                 flexShrink={0}
                 attributes={human && pulse() ? TextAttributes.BOLD : 0}
               >
-                {`${iconFor(issue, isResolved)} `}
+                {`${ic.glyph} `}
               </text>
               <text fg={THEME.accent.id} flexShrink={0}>{idStr}</text>
               <text
@@ -241,11 +239,12 @@ export const App: Component<AppProps> = (props) => {
           </scrollbox>
         </box>
 
-        {/* detail pane — takes the remaining 60% */}
+        {/* detail pane — definite 60% */}
         <box
           flexDirection="column"
+          width="60%"
+          flexShrink={0}
           flexGrow={1}
-          flexShrink={1}
           border={true}
           borderStyle="rounded"
           borderColor={focus() === "detail" ? THEME.border.focused : THEME.border.idle}
@@ -257,12 +256,13 @@ export const App: Component<AppProps> = (props) => {
               {(sel: Issue) => {
                 const detailRec = detail();
                 const body = detailRec?.body;
+                const ic = iconFor(sel, resolvedFor(sel));
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
                 return (
                   <box flexDirection="column" flexGrow={1}>
                     <box flexDirection="row">
-                      <text fg={iconColorFor(sel, isResolved, pulse())} flexShrink={0} attributes={TextAttributes.BOLD}>
-                        {`${iconFor(sel, isResolved)} `}
+                      <text fg={iconColor(ic.state, pulse())} flexShrink={0} attributes={TextAttributes.BOLD}>
+                        {`${ic.glyph} `}
                       </text>
                       <text fg={THEME.accent.id} flexShrink={0}>{issueNum(sel.id)}</text>
                       <text fg={THEME.text.dim} flexShrink={0}>  </text>
