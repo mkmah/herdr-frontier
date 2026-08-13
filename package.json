@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
+    "policy:check": "bun run src/policy-check.ts",
     "prototype": "bun run src/prototype-shell.tsx",
     "prototype:tree": "bun run src/prototype-tree.tsx",
     "prototype:look": "bun run src/prototype-lookfeel.tsx"
