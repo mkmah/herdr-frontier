@@ -235,8 +235,10 @@ export const App: Component<AppProps> = (props) => {
 
   return (
     <box flexDirection="column" flexGrow={1} live={true} backgroundColor={THEME.surface.bg}>
-      {/* header */}
-      <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
+      {/* header — flexShrink:0 keeps the row from collapsing when a below pane
+          overflows; without it OpenTUI 0.5.1 lays the overflowing pane content
+          over the header and the header disappears. */}
+      <box flexGrow={0} flexShrink={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
         <RoleText role="h2">◆ herdr-beads</RoleText>
         <RoleText role="meta">  issues  </RoleText>
         <text fg={THEME.text.title}>{issues().length}</text>

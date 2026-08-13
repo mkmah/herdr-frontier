@@ -200,4 +200,22 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).not.toContain("BODY OF 12 (must not paint under 11)");
     setup.renderer.destroy();
   });
+
+  // Regression: header-collapse repaint. When the selected issue's body is long
+  // enough to overflow the detail pane, OpenTUI 0.5.1 lays the overflowing
+  // content over the header row and the "herdr-beads ... open ... your-turn"
+  // header disappears. Rendered through the real reactive renderer (a tall
+  // initialDetail paints with no async interleaving, so it reproduces reliably).
+  it("keeps the header visible when the detail body overflows the pane", async () => {
+    const tall = mk({ id: ".scratch/herdr-beads/issues/01-x.md", title: "01 — X" });
+    const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[tall]} initialDetail={detail} />,
+      { width: 100, height: 12 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame.split("\n")[0]).toContain("◆ herdr-beads");
+    setup.renderer.destroy();
+  });
 });
