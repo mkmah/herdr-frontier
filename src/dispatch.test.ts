@@ -101,17 +101,28 @@ const PROFILES: ProfilesConfig = {
 
 const CWD = "/repo";
 
-function harness(issues: IssueDetail[]) {
+function harness(
+  issues: IssueDetail[],
+  over: { fixtures?: Record<string, string>; grace?: number } = {},
+) {
   const provider = new FakeProvider(issues);
   const claims = new ClaimRegistry();
   const { runner, calls } = recordingRunner({
     "api schema --json": SCHEMA,
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
-    "agent start #12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5": ok({}),
-    [`agent prompt #12 /implement ${ID}`]: ok({}),
+    "agent start herdr-beads-12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5": ok({}),
+    [`agent prompt herdr-beads-12 /implement ${ID}`]: ok({}),
+    ...over.fixtures,
   });
   const client = new HerdrClient({ runner });
-  const coordinator = new DispatchCoordinator({ client, provider, profiles: PROFILES, claims, cwd: CWD });
+  const coordinator = new DispatchCoordinator({
+    client,
+    provider,
+    profiles: PROFILES,
+    claims,
+    cwd: CWD,
+    deadDispatchGraceMs: over.grace,
+  });
   return { provider, claims, calls, coordinator };
 }
 
@@ -139,16 +150,17 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(result.args).toEqual(["-m", "claude-sonnet-4-5"]);
     expect(result.paneId).toBe("wZ:p3");
 
-    // The issue was claimed before dispatch — the provider record reflects it.
-    expect((await h.provider.readIssue(ID)).status).toBe("claimed");
+    // We don't write status — the implement skill owns the lifecycle. The
+    // provider record stays open until the dispatched agent claims it.
+    expect((await h.provider.readIssue(ID)).status).toBe("open");
 
     // The herdr invocations: tab → agent start → (lazy schema introspection, at
     // first start-agent) → prompt, in schema-driven order.
     expect(h.calls.map((c) => c.join(" "))).toEqual([
       "tab create --cwd /repo --label 12 — Driver --no-focus",
       "api schema --json",
-      "agent start #12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5",
-      `agent prompt #12 /implement ${ID}`,
+      "agent start herdr-beads-12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5",
+      `agent prompt herdr-beads-12 /implement ${ID}`,
     ]);
   });
 
@@ -163,7 +175,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(1);
   });
 
-  it("reports already-claimed when the provider's gate is closed (claimed by another dispatcher)", async () => {
+  it("reports already-claimed when the issue isn't open (in-flight or done — status gate)", async () => {
     const h = harness([mk({ status: "claimed" })]);
     const result = await h.coordinator.dispatchIssue(mk({ status: "claimed" }));
     expect(result.ok).toBe(false);
@@ -181,10 +193,77 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
   });
 
-  it("releases the mutex so a retry is possible when the provider refuses", async () => {
+  it("never holds the mutex when the status gate blocks dispatch (retry stays possible)", async () => {
     const h = harness([mk({ status: "claimed" })]);
     const result = await h.coordinator.dispatchIssue(mk({ status: "claimed" }));
     expect(result.ok).toBe(false);
-    expect(h.claims.tryClaim(ID)).toBe(true); // freed for a later (valid) issue
+    expect(h.claims.tryClaim(ID)).toBe(true); // never claimed — free for a valid issue
+  });
+
+  it("reconcileClaims releases an id the implement skill reset back to open (re-dispatchable)", async () => {
+    const h = harness([mk()]);
+    // Dispatch succeeds — the implement skill later claims (status → claimed).
+    await h.coordinator.dispatchIssue(mk());
+    expect(h.claims.has(ID)).toBe(true);
+    h.coordinator.reconcileClaims([mk({ status: "claimed" })]);
+    expect(h.claims.isConfirmed(ID)).toBe(true); // handoff confirmed
+    expect(h.claims.has(ID)).toBe(true); // still held while in-flight
+    // User resets it to open — reconcile sees open+confirmed → release.
+    h.coordinator.reconcileClaims([mk({ status: "open" })]);
+    expect(h.claims.has(ID)).toBe(false); // now re-dispatchable
+  });
+
+  it("reconcileClaims keeps an unconfirmed open id held (handoff window)", async () => {
+    const h = harness([mk()]);
+    await h.coordinator.dispatchIssue(mk());
+    // Implement hasn't claimed yet — status still open, never confirmed.
+    h.coordinator.reconcileClaims([mk({ status: "open" })]);
+    expect(h.claims.has(ID)).toBe(true); // handoff window — keep holding
+  });
+
+  it("reconcileClaims releases an id the implement skill finished (resolved)", async () => {
+    const h = harness([mk()]);
+    await h.coordinator.dispatchIssue(mk());
+    h.coordinator.reconcileClaims([mk({ status: "resolved" })]);
+    expect(h.claims.has(ID)).toBe(false);
+  });
+
+  it("reconcileDeadDispatches releases a dispatch whose tab was closed before claiming", async () => {
+    // grace 0 so the just-dispatched claim is immediately eligible; the agent
+    // list is empty → the pane is gone → release (re-dispatchable).
+    const h = harness([mk()], { grace: 0, fixtures: { "agent list": ok({ agents: [] }) } });
+    await h.coordinator.dispatchIssue(mk());
+    expect(h.claims.has(ID)).toBe(true);
+    await h.coordinator.reconcileDeadDispatches();
+    expect(h.claims.has(ID)).toBe(false);
+  });
+
+  it("reconcileDeadDispatches keeps a dispatch whose agent is still alive (not yet claimed)", async () => {
+    // Agent still registered against the dispatched pane → it's just slow to
+    // claim → keep holding (no premature release / duplicate dispatch).
+    const h = harness(
+      [mk()],
+      { grace: 0, fixtures: { "agent list": ok({ agents: [{ agent_status: "working", pane_id: "wZ:p3" }] }) } },
+    );
+    await h.coordinator.dispatchIssue(mk());
+    await h.coordinator.reconcileDeadDispatches();
+    expect(h.claims.has(ID)).toBe(true);
+  });
+
+  it("reconcileDeadDispatches skips confirmed dispatches (the tracker owns those)", async () => {
+    // Confirmed (claimed) but agent list empty — still held: status reconciles it.
+    const h = harness([mk()], { grace: 0, fixtures: { "agent list": ok({ agents: [] }) } });
+    await h.coordinator.dispatchIssue(mk());
+    h.coordinator.reconcileClaims([mk({ status: "claimed" })]);
+    await h.coordinator.reconcileDeadDispatches();
+    expect(h.claims.has(ID)).toBe(true);
+  });
+
+  it("reconcileDeadDispatches respects the grace window (just dispatched, never checked)", async () => {
+    const h = harness([mk()], { grace: 60_000, fixtures: { "agent list": ok({ agents: [] }) } });
+    await h.coordinator.dispatchIssue(mk());
+    await h.coordinator.reconcileDeadDispatches();
+    expect(h.claims.has(ID)).toBe(true); // within grace — not yet eligible
+    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "list")).toBe(false); // didn't even query
   });
 });

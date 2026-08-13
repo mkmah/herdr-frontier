@@ -31,6 +31,7 @@ import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./dis
 import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
 import { dispatch } from "./orchestrator.js";
 import type { DispatchCoordinator } from "./dispatch.js";
+import { copySelection } from "./selection.js";
 
 export interface AppProps {
   provider: TrackerProvider;
@@ -83,8 +84,11 @@ export const App: Component<AppProps> = (props) => {
     setLoaded(false);
     setError(null);
     try {
-      setIssues(sortIssues(await props.provider.listIssues()));
+      const fresh = sortIssues(await props.provider.listIssues());
+      setIssues(fresh);
       setCursor(0);
+      props.dispatchCoordinator?.reconcileClaims(fresh);
+      await props.dispatchCoordinator?.reconcileDeadDispatches();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -100,6 +104,27 @@ export const App: Component<AppProps> = (props) => {
   // Attention pulse — toggles human-turn icons orange ↔ soft-gold (prototype 06).
   onMount(() => {
     const id = setInterval(() => setTick((t) => t ^ 1), 600);
+    onCleanup(() => clearInterval(id));
+  });
+
+  // Background poll — the implement skill owns the open→claimed→resolved
+  // lifecycle and writes it from another pane; refresh so the list reflects
+  // reality, and reconcile the in-session claim mutex so an issue reset back to
+  // open becomes re-dispatchable. Silent: never resets selection or flashes a
+  // loading state (that's what `r` / load() are for).
+  async function poll() {
+    if (!props.dispatchCoordinator) return;
+    try {
+      const fresh = sortIssues(await props.provider.listIssues());
+      setIssues(fresh);
+      props.dispatchCoordinator.reconcileClaims(fresh);
+      await props.dispatchCoordinator.reconcileDeadDispatches();
+    } catch {
+      // Background poll failures are non-fatal — the next tick retries.
+    }
+  }
+  onMount(() => {
+    const id = setInterval(poll, 5000);
     onCleanup(() => clearInterval(id));
   });
 
@@ -128,7 +153,8 @@ export const App: Component<AppProps> = (props) => {
       const r = await props.dispatchCoordinator.dispatchIssue(sel);
       if (r.ok) {
         setDispatchState({ status: "ok", issueId: sel.id, paneId: r.paneId, command: r.command });
-        setIssues((prev) => prev.map((i) => (i.id === sel.id ? { ...i, status: "claimed" } : i)));
+        // We don't flip the issue's status here — the implement skill owns the
+        // open→claimed→resolved lifecycle; the background poll picks up its write.
       } else {
         const msg =
           r.reason === "already-dispatched"
@@ -287,7 +313,7 @@ export const App: Component<AppProps> = (props) => {
   };
 
   return (
-    <box flexDirection="column" flexGrow={1} live={true} backgroundColor={THEME.surface.bg}>
+    <box flexDirection="column" flexGrow={1} live={true} backgroundColor={THEME.surface.bg} onMouseUp={() => copySelection(renderer)}>
       {/* header — flexShrink:0 keeps the row from collapsing when a below pane
           overflows; without it OpenTUI 0.5.1 lays the overflowing pane content
           over the header and the header disappears. */}

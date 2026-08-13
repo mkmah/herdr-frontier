@@ -12,36 +12,91 @@
 // IO-behind-seams: a TrackerProvider (Seam 1) + the injectable herdr client (Seam 3).
 
 import { dispatch } from "./orchestrator.js";
-import { issueNum, trunc } from "./logic.js";
-import { AlreadyClaimed, type Issue, type TrackerProvider } from "./tracker/provider.js";
+import { effortOf, issueNum, trunc } from "./logic.js";
+import { type Issue, type TrackerProvider } from "./tracker/provider.js";
 import { HerdrClient } from "./herdr-client.js";
 import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.js";
 
 /**
- * The in-session claim mutex (CONTEXT.md: Claim). The tracker's `claim` verb is
- * the cross-process gate; this registry is the orchestrator-level one — the
- * first gate checked before any dispatch, shared by manual (issue 12) and
- * automated (issue 14) dispatchers.
+ * The in-session claim mutex (CONTEXT.md: Claim). With provider.claim removed,
+ * this guards only the handoff window — between our dispatch and the implement
+ * skill writing `Status: claimed`. Each entry tracks:
+ *  - `confirmed`: the tracker has shown `claimed` (the implement skill took
+ *    over). After that, a return to `open` is a reset → re-dispatchable; until
+ *    then, an `open` status is still the handoff window.
+ *  - `paneId` + `dispatchedAt`: which herdr pane hosts the agent, and when we
+ *    dispatched — used to release a dispatch whose tab was closed before the
+ *    agent ever claimed (otherwise it would hang forever as "already
+ *    dispatched").
  */
 export class ClaimRegistry {
-  private readonly claimed = new Set<string>();
+  private readonly claimed = new Map<string, { confirmed: boolean; paneId?: string; dispatchedAt: number }>();
 
   /** Claim `id` for this session; false when it is already claimed. */
   tryClaim(id: string): boolean {
     if (this.claimed.has(id)) return false;
-    this.claimed.add(id);
+    this.claimed.set(id, { confirmed: false, dispatchedAt: Date.now() });
     return true;
+  }
+
+  /** Record the herdr pane the agent landed in (after `tab create`). */
+  setPaneId(id: string, paneId: string): void {
+    const entry = this.claimed.get(id);
+    if (entry) entry.paneId = paneId;
   }
 
   /** Free `id` so a later dispatch can retry. */
   release(id: string): void {
     this.claimed.delete(id);
   }
+
+  /** Record that the tracker shows `claimed` for `id` (the implement skill took
+   *  over). After this, a return to `open` is a reset, not the handoff window. */
+  confirm(id: string): void {
+    const entry = this.claimed.get(id);
+    if (entry) entry.confirmed = true;
+  }
+
+  has(id: string): boolean {
+    return this.claimed.has(id);
+  }
+
+  isConfirmed(id: string): boolean {
+    return this.claimed.get(id)?.confirmed ?? false;
+  }
+
+  paneIdOf(id: string): string | undefined {
+    return this.claimed.get(id)?.paneId;
+  }
+
+  dispatchedAtOf(id: string): number | undefined {
+    return this.claimed.get(id)?.dispatchedAt;
+  }
+
+  /** All ids currently held by the mutex (for reconcile). */
+  ids(): string[] {
+    return [...this.claimed.keys()];
+  }
 }
 
-/** Short stable agent-session name for an issue (later the prompt target). */
+/**
+ * A valid herdr agent-session name for an issue (later the prompt target).
+ * herdr requires: lowercase letter first, then [a-z0-9_-], ≤32 chars. The old
+ * `#NN` label violated that (starts with `#`), so we derive `<effort>-<num>`
+ * instead — which also disambiguates two efforts' "#09".
+ */
 function sessionNameFor(id: string): string {
-  return issueNum(id);
+  const num = issueNum(id).replace(/^#/, "");
+  return sanitizeAgentName(`${effortOf(id)}-${num}`);
+}
+
+/** Map arbitrary text onto herdr's agent-name charset (lowercase, [a-z0-9_-],
+ *  ≤32, letter-first). */
+function sanitizeAgentName(raw: string): string {
+  let s = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/(^-+)|(-+$)/g, "");
+  if (!s) return "issue";
+  if (!/^[a-z]/.test(s)) s = `a-${s}`;
+  return s.slice(0, 32);
 }
 
 /** Human tab label for the dispatched agent's tab. */
@@ -56,6 +111,10 @@ export interface DispatchDeps {
   claims: ClaimRegistry;
   /** Where the dispatched agent tab lands (defaults to the plugin's cwd). */
   cwd?: string;
+  /** How long after dispatch before a dead-dispatch check may release an
+   *  unconfirmed claim whose tab is gone (lets the agent register first).
+   *  Defaults to 10s. */
+  deadDispatchGraceMs?: number;
 }
 
 export type DispatchFailureReason = "already-dispatched" | "already-claimed" | "not-dispatchable";
@@ -76,11 +135,12 @@ export class DispatchCoordinator {
   constructor(private readonly deps: DispatchDeps) {}
 
   /**
-   * Manual dispatch of one Issue: check dispatchability first (never claim a
-   * human turn), take the shared claim mutex, then claim on the tracker, and
-   * drive herdr: tab → agent start (profile kind + raw args) → prompt with the
-   * `/implement {id}` / `/wayfinder {id}` command. On a claim refusal the
-   * mutex is freed for a retry.
+   * Manual dispatch of one Issue: check dispatchability first (never dispatch a
+   * human turn), then gate on status (only `open` issues — the implement skill
+   * owns the open→claimed→resolved lifecycle, so anything non-open is in-flight
+   * or done), take the in-session mutex, and drive herdr: tab → agent start
+   * (profile kind + raw args) → prompt with `/implement {id}` / `/wayfinder
+   * {id}`. We never write status ourselves; the implement skill does.
    */
   async dispatchIssue(issue: Issue): Promise<DispatchResult> {
     const outcome = dispatch(issue);
@@ -88,11 +148,13 @@ export class DispatchCoordinator {
       return { ok: false, issue, command: null, reason: "not-dispatchable" };
     }
     const command = outcome.command;
+    if (issue.status !== "open") {
+      return { ok: false, issue, command, reason: "already-claimed" };
+    }
     if (!this.deps.claims.tryClaim(issue.id)) {
       return { ok: false, issue, command, reason: "already-dispatched" };
     }
     try {
-      const claimed = await this.deps.provider.claim(issue.id);
       const profile = resolveProfile(this.deps.profiles, profileKeyFor(issue));
       const name = sessionNameFor(issue.id);
       const { paneId } = await this.deps.client.createTab({
@@ -100,18 +162,67 @@ export class DispatchCoordinator {
         label: tabLabelFor(issue),
         focus: false,
       });
+      this.deps.claims.setPaneId(issue.id, paneId);
       await this.deps.client.startAgent({ name, kind: profile.kind, pane: paneId, args: profile.args });
       await this.deps.client.prompt(name, command, paneId);
-      return { ok: true, issue: claimed, command, paneId, kind: profile.kind, args: profile.args };
+      return { ok: true, issue, command, paneId, kind: profile.kind, args: profile.args };
     } catch (e) {
-      if (e instanceof AlreadyClaimed) {
-        // We never took the claim — free the mutex so a later dispatch can retry.
-        this.deps.claims.release(issue.id);
-        return { ok: false, issue, command, reason: "already-claimed" };
-      }
-      // Any later failure: the tracker-side claim stands (claim before work is
-      // the mutex contract), so the in-session gate stays held with it.
+      // The handoff failed (herdr error, etc.) — release the mutex so the user
+      // can retry. The mutex is held only across a successful handoff, until
+      // reconcileClaims observes the implement skill's status write.
+      this.deps.claims.release(issue.id);
       throw e;
+    }
+  }
+
+  /**
+   * Sync the in-session mutex with tracker status after a reload/poll. The
+   * implement skill writes status from another pane; this releases ids whose
+   * work is finished (`resolved`) or was reset back to `open` after the skill
+   * had confirmed it (`claimed` → `open`), so they can be re-dispatched. An
+   * `open` id that was never confirmed is still in the handoff window — keep it.
+   */
+  reconcileClaims(issues: Issue[]): void {
+    for (const id of this.deps.claims.ids()) {
+      const issue = issues.find((i) => i.id === id);
+      if (!issue) continue; // not in the loaded set — leave as-is
+      if (issue.status === "claimed") {
+        this.deps.claims.confirm(id);
+      } else if (issue.status === "resolved") {
+        this.deps.claims.release(id);
+      } else if (issue.status === "open" && this.deps.claims.isConfirmed(id)) {
+        this.deps.claims.release(id); // was in-flight, now reset → re-dispatchable
+      }
+    }
+  }
+
+  /**
+   * Release dispatches whose herdr tab was closed before the implement skill
+   * ever claimed (status never reached `claimed`). Without this, closing a tab
+   * mid-handoff would leave the issue pinned as "already dispatched" forever.
+   * Confirmed dispatches are skipped — the tracker status owns those. A grace
+   * window (default 10s) after dispatch avoids racing the agent's registration
+   * in `herdr agent list`.
+   */
+  async reconcileDeadDispatches(): Promise<void> {
+    const grace = this.deps.deadDispatchGraceMs ?? 10_000;
+    const now = Date.now();
+    const candidates = this.deps.claims.ids().filter((id) => {
+      if (this.deps.claims.isConfirmed(id)) return false; // implement owns it now
+      const at = this.deps.claims.dispatchedAtOf(id);
+      return at != null && now - at >= grace && this.deps.claims.paneIdOf(id) != null;
+    });
+    if (candidates.length === 0) return;
+    const alive = new Set(
+      (await this.deps.client.listAgents())
+        .map((a) => a.pane_id)
+        .filter((p): p is string => typeof p === "string"),
+    );
+    for (const id of candidates) {
+      const pane = this.deps.claims.paneIdOf(id);
+      if (pane && !alive.has(pane)) {
+        this.deps.claims.release(id); // tab closed / agent gone, never claimed
+      }
     }
   }
 }
