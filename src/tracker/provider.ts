@@ -90,6 +90,25 @@ export class IssueNotFound extends Error {
   }
 }
 
+/** `claim` on an issue that is not open (already claimed by another dispatcher). */
+export class AlreadyClaimed extends Error {
+  constructor(
+    public readonly id: string,
+    public readonly status: IssueStatus,
+  ) {
+    super(`Issue already claimed: ${id} (status: ${status})`);
+    this.name = "AlreadyClaimed";
+  }
+}
+
+/** `claim`'s exclusive lock could not be acquired in time (contended/stale). */
+export class ClaimBusy extends Error {
+  constructor(public readonly id: string) {
+    super(`Claim mutex busy: ${id}`);
+    this.name = "ClaimBusy";
+  }
+}
+
 /** A canonical label has no mapping in the adapter's label-map. */
 export class LabelNotInMap extends Error {
   constructor(public readonly label: string) {

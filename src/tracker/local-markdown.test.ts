@@ -7,7 +7,7 @@
 // missing-`Labels:` ⇒ needs-triage rule, filtering, and error behavior.
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { rm, mkdir, writeFile, mkdtemp } from "node:fs/promises";
+import { rm, mkdir, writeFile, mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import {
   serializeIssue,
 } from "./local-markdown.js";
 import {
+  AlreadyClaimed,
   IssueNotFound,
   type Issue,
   type IssueDetail,
@@ -269,5 +270,92 @@ describe("display scalars: tasks tally + updatedAt", () => {
     const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
     expect(issue.tasks).toBeUndefined();
     expect(typeof issue.updatedAt).toBe("number");
+  });
+});
+
+describe("LocalMarkdownProvider.claim (issue 12 — atomic mutex)", () => {
+  const BODY = "## What to build\n\nThe driver with an injectable runner.\n\n- [ ] claim first\n- [ ] dispatch after";
+  async function seed(): Promise<string> {
+    await writeIssue(
+      "herdr-beads",
+      "12-driver.md",
+      ["# 12 — Driver", "", "Status: open", "Type: task", "Labels: ready-for-agent", "Blocked by: 10, 11", "Assignee: —", "", BODY].join("\n"),
+    );
+    return ".scratch/herdr-beads/issues/12-driver.md";
+  }
+
+  it("flips Status: claimed and returns the updated Issue before any work", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const claimed = await p.claim(id);
+    expect(claimed.status).toBe("claimed");
+    expect(claimed.title).toBe("12 — Driver");
+    expect(claimed.labels).toEqual(["ready-for-agent"]);
+
+    const listed = (await p.listIssues())[0]!;
+    expect(listed.status).toBe("claimed");
+    // The mutex is written to disk — a fresh provider instance still sees it.
+    const fresh = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(fresh.status).toBe("claimed");
+  });
+
+  it("preserves the body and the rest of the file exactly", async () => {
+    const id = await seed();
+    await new LocalMarkdownProvider({ repoRoot: root }).claim(id);
+    const detail = await new LocalMarkdownProvider({ repoRoot: root }).readIssue(id);
+    expect(detail.body).toBe(BODY);
+    expect(detail.blockedBy).toEqual(["10", "11"]);
+    expect(detail.assignee).toBeNull();
+    expect(detail.tasks).toEqual({ done: 0, total: 2 }); // the acceptance checkboxes survive
+  });
+
+  it("refuses to claim an already-claimed or resolved issue (AlreadyClaimed)", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.claim(id);
+    await expect(p.claim(id)).rejects.toBeInstanceOf(AlreadyClaimed);
+
+    await writeIssue("herdr-beads", "05-done.md", "# 05 — Done\n\nStatus: resolved\nLabels: ready-for-agent\nBlocked by: —\n");
+    await expect(p.claim(".scratch/herdr-beads/issues/05-done.md")).rejects.toBeInstanceOf(AlreadyClaimed);
+  });
+
+  it("throws IssueNotFound for a missing id", async () => {
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await expect(p.claim(".scratch/none/issues/ghost.md")).rejects.toBeInstanceOf(IssueNotFound);
+  });
+
+  it("claims a file that lacks a Status: line (inserts one after the title)", async () => {
+    await writeIssue("herdr-beads", "13-bare.md", "# 13 — Bare\n\nLabels: ready-for-agent\nBlocked by: —\n");
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const claimed = await p.claim(".scratch/herdr-beads/issues/13-bare.md");
+    expect(claimed.status).toBe("claimed");
+    const onDisk = await readFile(issuePath("herdr-beads", "13-bare.md"), "utf8");
+    expect(onDisk).toContain("Status: claimed");
+  });
+
+  it("writes atomically — no temp-file corpse is left behind", async () => {
+    const id = await seed();
+    await new LocalMarkdownProvider({ repoRoot: root }).claim(id);
+    const dir = issuePath("herdr-beads", "12-driver.md").replace(/12-driver\.md$/, "");
+    const files = await readdir(dir);
+    expect(files).toEqual(["12-driver.md"]);
+    const onDisk = await readFile(join(dir, "12-driver.md"), "utf8");
+    expect(onDisk).toContain("Status: claimed");
+    expect(onDisk).not.toContain("Status: open");
+  });
+
+  it("serializes concurrent claims — exactly one wins, the rest see AlreadyClaimed", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    // Two claimers racing on the same open issue: the O_EXCL lock makes their
+    // read-check-write one critical section, so the second reads `claimed` —
+    // the cross-process guarantee, not just per-session.
+    const results = await Promise.allSettled([p.claim(id), p.claim(id)]);
+    const wins = results.filter((r) => r.status === "fulfilled" && r.value.status === "claimed");
+    const loses = results.filter((r) => r.status === "rejected" && r.reason instanceof AlreadyClaimed);
+    expect(wins).toHaveLength(1);
+    expect(loses).toHaveLength(1);
+    const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
+    expect(onDisk).toContain("Status: claimed");
   });
 });

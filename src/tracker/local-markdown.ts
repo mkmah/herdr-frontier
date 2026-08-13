@@ -23,9 +23,12 @@
 // `wayfinder:<type>` line is read only to infer `Type` (the field Option C
 // keeps separate from labels), never as a label.
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, rm, stat, writeFile, rename } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
+  AlreadyClaimed,
+  ClaimBusy,
   type Issue,
   type IssueDetail,
   type IssueFilter,
@@ -76,13 +79,36 @@ export class LocalMarkdownProvider implements TrackerProvider {
     }
   }
 
-  // -- write side: out of scope for this read-only skeleton -----------------
+  // -- write side: claim is live; the rest lands in later issues ------------
   // Signatures match ADR-0001 so the shape stays visible for later issues;
-  // each throws until implemented.
+  // each not-yet-implemented verb throws until it lands.
 
-  async claim(_id: string): Promise<Issue> {
-    return unsupported("claim");
+  /**
+   * Claim an Issue (mutex intent): flip `Status: claimed`, written atomically
+   * before any work (CONTEXT.md: Claim). The read-check-write runs under an
+   * exclusive filesystem lock (`.lock`, O_EXCL), so the status check and the
+   * write are one critical section across processes — two concurrent dispatchers
+   * cannot both read `open` and both claim. An issue that is not open throws
+   * {@link AlreadyClaimed}; a lock that cannot be acquired in time throws
+   * {@link ClaimBusy}.
+   */
+  async claim(id: string): Promise<Issue> {
+    const abs = join(this.repoRoot, ...id.split("/"));
+    return withClaimLock(abs, async () => {
+      let content: string;
+      try {
+        content = await readFile(abs, "utf8");
+      } catch {
+        throw new IssueNotFound(id);
+      }
+      const fm = parseFrontmatter(content, id);
+      if (fm.status !== "open") throw new AlreadyClaimed(id, fm.status);
+      const updated = setStatusLine(content, fm.bodyStart, "claimed");
+      await atomicWrite(abs, updated);
+      return parseIssue(updated, id);
+    });
   }
+
   async updateLabels(_id: string, _add?: string[], _remove?: string[]): Promise<Issue> {
     return unsupported("updateLabels");
   }
@@ -137,6 +163,78 @@ export class LocalMarkdownProvider implements TrackerProvider {
 
 function unsupported(verb: string): never {
   throw new Error(`LocalMarkdownProvider.${verb} is not implemented in the read-only skeleton (issue 09)`);
+}
+
+// --- atomic claim helpers ---------------------------------------------------
+
+/**
+ * Rewrite the frontmatter `Status:` line (only the lines before the body) to a
+ * new status. A file with no `Status:` line gains one right after the title.
+ */
+function setStatusLine(content: string, bodyStart: number, status: IssueStatus): string {
+  const lines = content.split("\n");
+  const front = lines.slice(0, bodyStart);
+  const rest = lines.slice(bodyStart);
+  const idx = front.findIndex((l) => /^Status:/i.test(l));
+  if (idx >= 0) {
+    front[idx] = front[idx]!.replace(/^Status:.*$/i, `Status: ${status}`);
+  } else {
+    const head = front.findIndex((l) => /^#\s/.test(l));
+    front.splice(head >= 0 ? head + 1 : 0, 0, `Status: ${status}`);
+  }
+  return [...front, ...rest].join("\n");
+}
+
+/**
+ * Write a file via temp-file + rename so a reader never observes a torn file
+ * mid-write — the property that makes local-markdown's claim race-free at the
+ * filesystem level (per-session coordination is the orchestrator's mutex).
+ */
+async function atomicWrite(abs: string, content: string): Promise<void> {
+  const tmp = `${abs}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, "utf8");
+  await rename(tmp, abs);
+}
+
+// Claim mutex constants: how long to wait for a contended `.lock` before
+// giving up. The lock window is a single read-modify-write (microseconds), so
+// a 2s budget is far beyond any healthy hold; a stale lock (crashed process)
+// times out as ClaimBusy instead of deadlocking.
+const CLAIM_LOCK_ATTEMPTS = 200;
+const CLAIM_LOCK_DELAY_MS = 10;
+
+/**
+ * Run `fn` inside an exclusive file lock (`<file>.lock` created with O_EXCL).
+ * Concurrent callers — across processes, this is the cross-process mutex —
+ * serialize on the create-or-fail of the lock; the holder's read-check-write
+ * in {@link LocalMarkdownProvider.claim} is one critical section. The lock is
+ * removed in a finally so a failed claim can't wedge future ones.
+ */
+async function withClaimLock<T>(abs: string, fn: () => Promise<T>): Promise<T> {
+  const lockPath = `${abs}.lock`;
+  for (let attempt = 0; attempt < CLAIM_LOCK_ATTEMPTS; attempt++) {
+    let fd: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      fd = await open(lockPath, "wx");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+        // Not contention (e.g. the parent dir doesn't exist) — there is no
+        // issue to lock; let `fn` raise the real NotFound/IO error.
+        return fn();
+      }
+      // held by a concurrent claimer — retry shortly
+    }
+    if (fd) {
+      try {
+        return await fn();
+      } finally {
+        await fd.close();
+        await rm(lockPath, { force: true });
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_LOCK_DELAY_MS));
+  }
+  throw new ClaimBusy(abs);
 }
 
 // --- parsing ---------------------------------------------------------------

@@ -29,6 +29,9 @@ import {
 } from "./logic.js";
 import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./display.js";
 import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
+import { dispatch } from "./orchestrator.js";
+import { resolvePrompt } from "./dispatch.js";
+import type { DispatchCoordinator } from "./dispatch.js";
 
 export interface AppProps {
   provider: TrackerProvider;
@@ -38,7 +41,16 @@ export interface AppProps {
   initialDetail?: IssueDetail;
   /** Called on q/Esc. Defaults to `renderer.destroy()` (restores the terminal); overridable for tests. */
   onQuit?: () => void;
+  /** Manual single-issue dispatch (issue 12). Production builds one in index.tsx. */
+  dispatchCoordinator?: DispatchCoordinator;
 }
+
+/** The detail pane's dispatch feedback, scoped to the issue it dispatched. */
+type DispatchUi =
+  | { status: "idle" }
+  | { status: "running"; issueId: string }
+  | { status: "ok"; issueId: string; paneId: string; command: string }
+  | { status: "error"; issueId: string; message: string };
 
 /** Chip background for a canonical label — wayfinder → brand, else the triage palette. */
 function Chip(props: { label: string }) {
@@ -65,6 +77,7 @@ export const App: Component<AppProps> = (props) => {
   const [focus, setFocus] = createSignal<Focus>("list");
   const [detail, setDetail] = createSignal<IssueDetail | null>(props.initialDetail ?? null);
   const [detailLoading, setDetailLoading] = createSignal(false);
+  const [dispatchState, setDispatchState] = createSignal<DispatchUi>({ status: "idle" });
   const [tick, setTick] = createSignal(0); // attention pulse
 
   async function load() {
@@ -103,18 +116,54 @@ export const App: Component<AppProps> = (props) => {
     setCursor((c) => moveCursor(c, dir, issues().length));
   }
 
+  // --- manual dispatch (issue 12) ------------------------------------------
+  // `Enter` (or double-click) dispatches the selected Issue: claim → resolve
+  // `{id}` → `agent start` from the profile. The coordinator owns the shared
+  // claim mutex; we only render its outcome and reflect the claim in the list so
+  // the row flips to "running" without a full reload.
+  async function doDispatch() {
+    const sel = selected();
+    if (!sel || !props.dispatchCoordinator) return;
+    setDispatchState({ status: "running", issueId: sel.id });
+    try {
+      const r = await props.dispatchCoordinator.dispatchIssue(sel);
+      if (r.ok) {
+        setDispatchState({ status: "ok", issueId: sel.id, paneId: r.paneId, command: r.command });
+        setIssues((prev) => prev.map((i) => (i.id === sel.id ? { ...i, status: "claimed" } : i)));
+      } else {
+        const msg =
+          r.reason === "already-dispatched"
+            ? "already dispatched this session"
+            : r.reason === "already-claimed"
+              ? "already claimed by another dispatcher"
+              : "human turn — not auto-dispatched";
+        setDispatchState({ status: "error", issueId: sel.id, message: msg });
+      }
+    } catch (e) {
+      setDispatchState({ status: "error", issueId: sel.id, message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   // --- mouse support (prototype 08's behavior, applied to the real shell) ---
   // Click a row = select + focus the list. Wheel over the list = move the
-  // cursor. Click the detail pane = focus detail. (Launch is double-click slot
-  // in the prototypes; real launch lands with the driver, issue 12.)
+  // cursor. Click the detail pane = focus detail. Double-click a row = dispatch
+  // (the prototype's dispatch slot, wired to the real client now).
   function selectById(id: string) {
     const idx = issues().findIndex((i) => i.id === id);
     if (idx >= 0) setCursor(idx);
   }
+  let lastClick: { id: string; at: number } | null = null;
   function onRowMouseDown(e: MouseEvent, id: string) {
     if (e.button !== MouseButton.LEFT) return;
     setFocus("list");
     selectById(id);
+    const now = Date.now();
+    if (lastClick && lastClick.id === id && now - lastClick.at < 400) {
+      lastClick = null;
+      void doDispatch();
+    } else {
+      lastClick = { id, at: now };
+    }
   }
   function onListWheel(e: MouseEvent) {
     if (e.button === MouseButton.WHEEL_UP) move(-1);
@@ -129,6 +178,7 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "tab") setFocus((f) => cycleFocus(f));
     else if (key.name === "j" || key.name === "down") move(1);
     else if (key.name === "k" || key.name === "up") move(-1);
+    else if (key.name === "return") void doDispatch();
     else if (key.name === "r") void load();
   });
 
@@ -165,9 +215,10 @@ export const App: Component<AppProps> = (props) => {
   const detailInnerW = () => Math.max(0, detailPaneW() - 4);
 
   // Key for the detail pane's content. Includes the selection, whether the body
-  // read has landed (L/P/E), and the pane width (for header re-truncation). A
-  // keyed <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint
-  // text or props in place, so the pane must remount when the read lands or the
+  // read has landed (L/P/E), the pane width (for header re-truncation), and the
+  // dispatch state (so the pane remounts when dispatch feedback changes). A keyed
+  // <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint text
+  // or props in place, so the pane must remount when the read lands or the
   // loaded body would never appear (same workaround as the list-row selection
   // background and pulse).
   const detailKey = createMemo(() => {
@@ -175,7 +226,10 @@ export const App: Component<AppProps> = (props) => {
     if (!s) return null;
     const d = detail();
     const loaded = d && d.id === s.id;
-    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}`;
+    const ds = dispatchState();
+    const dispatchPart =
+      ds.status === "idle" ? "I" : ds.status === "running" ? "R" : ds.status === "ok" ? `ok:${ds.paneId}` : "E";
+    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}|${dispatchPart}`;
   });
 
   const openCount = () => issues().filter((i) => i.status === "open").length;
@@ -315,6 +369,14 @@ export const App: Component<AppProps> = (props) => {
                 const body = loaded ? detailRec.body : null;
                 const ic = iconFor(sel, resolvedFor(sel));
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
+                const outcome = dispatch(sel);
+                const dispatchable = outcome.kind === "implement" || outcome.kind === "wayfinder";
+                // The dispatch command the agent will actually receive — `{id}`
+                // resolved to the Issue body (its own `/implement`/`/wayfinder`
+                // do not parse `{id}`, CONTEXT.md; issue 12 what-to-build).
+                const resolvedPrompt = dispatchable && loaded ? resolvePrompt(outcome, detailRec!) : null;
+                const ds = dispatchState();
+                const showDispatch = ds.status !== "idle" && ds.issueId === sel.id;
                 return (
                   <box flexDirection="column" flexGrow={1}>
                     <box flexDirection="row">
@@ -333,7 +395,34 @@ export const App: Component<AppProps> = (props) => {
                     <RoleText role="meta">
                       {`blocked by: ${sel.blockedBy.length ? sel.blockedBy.join(", ") : "—"}    agent: ${sel.assignee ?? "unclaimed"}${sel.tasks ? `    tasks: ${sel.tasks.done}/${sel.tasks.total}` : ""}${sel.updatedAt != null ? `    ${humanizeAge(sel.updatedAt, Date.now())} ago` : ""}`}
                     </RoleText>
+                    <box flexDirection="row" paddingTop={1}>
+                      <RoleText role="meta">dispatch: </RoleText>
+                      <text
+                        fg={dispatchable ? THEME.state.done : THEME.state.human}
+                        attributes={TextAttributes.BOLD}
+                      >
+                        {resolvedPrompt ?? (dispatchable ? outcome.command : "(no auto-dispatch — human turn)")}
+                      </text>
+                    </box>
                     <text fg={THEME.text.dimmer}>{""}</text>
+                    {showDispatch ? (
+                      <text
+                        fg={
+                          ds.status === "ok"
+                            ? THEME.state.done
+                            : ds.status === "error"
+                              ? THEME.state.blocked
+                              : THEME.state.running
+                        }
+                        attributes={TextAttributes.BOLD}
+                      >
+                        {ds.status === "ok"
+                          ? `↳ dispatched to pane ${ds.paneId}`
+                          : ds.status === "error"
+                            ? `✗ ${ds.message}`
+                            : "⟳ dispatching…"}
+                      </text>
+                    ) : null}
                     {loaded ? (
                       <RoleText role="body">{body}</RoleText>
                     ) : (
@@ -349,7 +438,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}

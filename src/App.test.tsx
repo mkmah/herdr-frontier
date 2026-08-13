@@ -218,4 +218,40 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame.split("\n")[0]).toContain("◆ herdr-beads");
     setup.renderer.destroy();
   });
+
+  // Issue 12 acceptance: the detail pane shows the resolved /implement or
+  // /wayfinder command (a dispatchable issue → its command; a human turn →
+  // the "(no auto-dispatch — human turn)" marker, exactly like the prototype).
+  it("shows the resolved dispatch command for a dispatchable issue", async () => {
+    const impl = mk({
+      id: ".scratch/herdr-beads/issues/12-driver.md",
+      title: "12 — Driver",
+      labels: ["ready-for-agent"],
+    });
+    const detail: IssueDetail = { ...impl, body: "Build the driver.", comments: [] };
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[impl]} initialDetail={detail} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("dispatch:");
+    // `{id}` is resolved to the Issue body in the shown command — the pane
+    // previews exactly what the agent will receive, not the `{id}` form.
+    expect(frame).toContain("/implement Build the driver.");
+    setup.renderer.destroy();
+  });
+
+  it("marks a human turn as not auto-dispatched", async () => {
+    const human = mk({ id: ".scratch/herdr-beads/issues/13-human.md", labels: ["ready-for-human"] });
+    const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[human]} initialDetail={detail} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("(no auto-dispatch — human turn)");
+    setup.renderer.destroy();
+  });
 });
