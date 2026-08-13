@@ -178,4 +178,26 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(setup.captureCharFrame()).toContain("no issues");
     setup.renderer.destroy();
   });
+
+  // Regression: the stale-detail race. When a detail record for a differently
+  // id'd issue is present while another issue is selected (the state between
+  // navigation and the new read resolving), the body must not paint under the
+  // wrong title.
+  it("does not paint a detail body whose id differs from the selected issue", async () => {
+    const eleven = mk({ id: ".scratch/herdr-beads/issues/11-a.md", title: "11 — A" });
+    const twelve = mk({ id: ".scratch/herdr-beads/issues/12-b.md", title: "12 — B" });
+    const staleDetail: IssueDetail = {
+      ...twelve,
+      body: "BODY OF 12 (must not paint under 11)",
+      comments: [],
+    };
+    const setup = await testRender(() => (
+      <App provider={noopProvider} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
+    ));
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // cursor starts at issue 11 — the body of 12 must not leak under it
+    expect(frame).not.toContain("BODY OF 12 (must not paint under 11)");
+    setup.renderer.destroy();
+  });
 });

@@ -293,7 +293,10 @@ export const App: Component<AppProps> = (props) => {
             <Show when={selected()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
               {(sel: Issue) => {
                 const detailRec = detail();
-                const body = detailRec?.body;
+                // A detail record is only valid for the issue it was read for.
+                // If the selection moved on, treat it as absent so the stale
+                // body can never paint under a different title.
+                const body = detailRec && detailRec.id === sel.id ? detailRec.body : null;
                 const ic = iconFor(sel, resolvedFor(sel));
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
                 return (
