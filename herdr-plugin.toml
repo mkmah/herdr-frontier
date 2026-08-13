@@ -1,0 +1,23 @@
+id = "herdr-beads"
+name = "herdr-beads"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "OpenTUI/Solid render layer that orchestrates the Matt Pocock skill workflow across a dependency graph of issues, on a multi-tracker substrate."
+platforms = ["macos", "linux"]
+
+# The read-only Issue list — the tracer-bullet pane (issue 09). herdr spawns
+# `command` as the pane's foreground process; it owns stdout like any TUI.
+[[panes]]
+id = "issues"
+title = "herdr-beads Issues"
+placement = "split"
+command = ["bun", "run", "src/index.tsx"]
+
+# Open the pane imperatively (declared panes surface via `herdr plugin pane open`).
+# Shells out through `$HERDR_BIN_PATH` (injected by herdr) since command vectors
+# are exec'd directly, not through a shell.
+[[actions]]
+id = "open"
+title = "Open herdr-beads issues"
+contexts = ["workspace"]
+command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-beads --entrypoint issues --placement split --focus"]

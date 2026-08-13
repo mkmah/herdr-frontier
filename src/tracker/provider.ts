@@ -1,0 +1,97 @@
+// Tracker-provider interface — the deep, narrow seam (ADR-0001).
+//
+// One async `TrackerProvider` interface, one adapter per tracker, behind which
+// all tracker-specific complexity hides. The orchestrator speaks only this
+// domain vocabulary (`Issue` records + canonical labels) and never downcasts
+// to a backend. The read side collapses into one materialized record; only the
+// write side stays factored into distinct verbs.
+
+/** Lifecycle of an issue. */
+export type IssueStatus = "open" | "claimed" | "resolved";
+
+/** The kind of work an issue represents. */
+export type IssueType = "research" | "prototype" | "grilling" | "task";
+
+/**
+ * Low-res record — enough to compute the frontier, no heavy text.
+ * `id` is opaque and unique within THIS provider:
+ *   - local-markdown: repo-relative file path
+ *   - beads: native id; GitHub: number; Jira: key; Linear: UUID
+ */
+export interface Issue {
+  id: string;
+  title: string;
+  status: IssueStatus;
+  type: IssueType;
+  /** Canonical vocab: the 5 triage roles + `wayfinder:*`. */
+  labels: string[];
+  /** Claim owner; null = unclaimed. */
+  assignee: string | null;
+  /** ids this issue waits on. */
+  blockedBy: string[];
+}
+
+/** Zoom record — full body + history, only from `readIssue`. */
+export interface IssueDetail extends Issue {
+  body: string;
+  comments: Comment[];
+}
+
+export interface Comment {
+  author?: string;
+  body: string;
+}
+
+export interface IssueFilter {
+  status?: IssueStatus;
+  /** Canonical labels; an issue matches if it carries ALL of them. */
+  labels?: string[];
+  /** Substring match against the title. */
+  title?: string;
+}
+
+/**
+ * 7 verbs. The read side (`listIssues` / `readIssue`) is one materialized
+ * record; the write side stays factored. Errors are typed and thrown — each is
+ * documented on the verb that can raise it.
+ */
+export interface TrackerProvider {
+  /** Low-res; no bodies. */
+  listIssues(filter?: IssueFilter): Promise<Issue[]>;
+  /** Zoom one. Throws {@link IssueNotFound}. */
+  readIssue(id: string): Promise<IssueDetail>;
+  /** Mutex intent. */
+  claim(id: string): Promise<Issue>;
+  /** Throws {@link LabelNotInMap} when a label is not in the adapter's map. */
+  updateLabels(id: string, add?: string[], remove?: string[]): Promise<Issue>;
+  /** Resolve + post answer in one call. */
+  close(id: string, resolution: string): Promise<Issue>;
+  /** Non-terminal talk. */
+  comment(id: string, body: string): Promise<Issue>;
+  /** Dep edge. Throws {@link BlockingNotSupported}. */
+  addBlocking(id: string, blockerIds: string[]): Promise<Issue>;
+}
+
+/** `readIssue` on an id no record exists for. */
+export class IssueNotFound extends Error {
+  constructor(public readonly id: string) {
+    super(`Issue not found: ${id}`);
+    this.name = "IssueNotFound";
+  }
+}
+
+/** A canonical label has no mapping in the adapter's label-map. */
+export class LabelNotInMap extends Error {
+  constructor(public readonly label: string) {
+    super(`Label not in label-map: ${label}`);
+    this.name = "LabelNotInMap";
+  }
+}
+
+/** The adapter cannot represent blocking edges (e.g. a tracker with no deps). */
+export class BlockingNotSupported extends Error {
+  constructor() {
+    super("Blocking not supported by this tracker");
+    this.name = "BlockingNotSupported";
+  }
+}
