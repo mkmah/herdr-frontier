@@ -4,7 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run --watch src/index.tsx"
+    "dev": "bun run --watch src/index.tsx",
+    "prototype": "bun run src/prototype-shell.tsx",
+    "prototype:tree": "bun run src/prototype-tree.tsx",
+    "prototype:look": "bun run src/prototype-lookfeel.tsx"
   },
   "devDependencies": {
     "@types/bun": "latest"
