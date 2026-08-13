@@ -13,21 +13,23 @@
 
 import { dispatch } from "./orchestrator.js";
 import { effortOf, issueNum, trunc } from "./logic.js";
-import { type Issue, type TrackerProvider } from "./tracker/provider.js";
+import { AlreadyClaimed, ClaimBusy, type Issue, type TrackerProvider } from "./tracker/provider.js";
 import { HerdrClient } from "./herdr-client.js";
 import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.js";
 
 /**
- * The in-session claim mutex (CONTEXT.md: Claim). With provider.claim removed,
- * this guards only the handoff window — between our dispatch and the implement
- * skill writing `Status: claimed`. Each entry tracks:
- *  - `confirmed`: the tracker has shown `claimed` (the implement skill took
- *    over). After that, a return to `open` is a reset → re-dispatchable; until
- *    then, an `open` status is still the handoff window.
+ * The in-session claim mutex (CONTEXT.md: Claim) — the fast, in-process guard
+ * that complements the provider's authoritative, cross-process `claim`. The
+ * provider's atomic write is the real mutex (two processes cannot both flip
+ * `Status: claimed`); this registry adds the cheap in-session short-circuit so
+ * a double-`Enter` in one process never reaches the filesystem lock, and tracks
+ * the herdr pane each dispatched issue landed in. Each entry records:
+ *  - `confirmed`: the tracker has shown `claimed` (the dispatch's claim has been
+ *    observed on reload). After that, a return to `open` is a reset →
+ *    re-dispatchable; until then, an `open` status is the pre-reload window.
  *  - `paneId` + `dispatchedAt`: which herdr pane hosts the agent, and when we
- *    dispatched — used to release a dispatch whose tab was closed before the
- *    agent ever claimed (otherwise it would hang forever as "already
- *    dispatched").
+ *    dispatched — used to release a dispatch whose tab was closed before its
+ *    claim was first observed (otherwise it would hang as "already dispatched").
  */
 export class ClaimRegistry {
   private readonly claimed = new Map<string, { confirmed: boolean; paneId?: string; dispatchedAt: number }>();
@@ -50,8 +52,9 @@ export class ClaimRegistry {
     this.claimed.delete(id);
   }
 
-  /** Record that the tracker shows `claimed` for `id` (the implement skill took
-   *  over). After this, a return to `open` is a reset, not the handoff window. */
+  /** Record that the tracker shows `claimed` for `id` (the dispatch's claim has
+   *  been observed on reload). After this, a return to `open` is a reset, not
+   *  the pre-reload window. */
   confirm(id: string): void {
     const entry = this.claimed.get(id);
     if (entry) entry.confirmed = true;
@@ -117,7 +120,11 @@ export interface DispatchDeps {
   deadDispatchGraceMs?: number;
 }
 
-export type DispatchFailureReason = "already-dispatched" | "already-claimed" | "not-dispatchable";
+export type DispatchFailureReason =
+  | "already-dispatched"
+  | "already-claimed"
+  | "claim-busy"
+  | "not-dispatchable";
 
 export type DispatchResult =
   | {
@@ -135,12 +142,20 @@ export class DispatchCoordinator {
   constructor(private readonly deps: DispatchDeps) {}
 
   /**
-   * Manual dispatch of one Issue: check dispatchability first (never dispatch a
-   * human turn), then gate on status (only `open` issues — the implement skill
-   * owns the open→claimed→resolved lifecycle, so anything non-open is in-flight
-   * or done), take the in-session mutex, and drive herdr: tab → agent start
-   * (profile kind + raw args) → prompt with `/implement {id}` / `/wayfinder
-   * {id}`. We never write status ourselves; the implement skill does.
+   * Manual dispatch of one Issue (CONTEXT.md: Dispatch): check dispatchability
+   * first (never dispatch a human turn), gate on the loaded status, take the
+   * in-session mutex, then **claim** it through the provider — the atomic,
+   * cross-process mutex intent that writes `Status: claimed` BEFORE any work
+   * (issue 12 acceptance #1). With the claim held, drive herdr: tab → agent
+   * start (profile kind + raw args) → prompt with `/implement {id}` / `/wayfinder
+   * {id}`. Two claim outcomes are surfaced as failures rather than thrown: a
+   * concurrent process that won the race between our load and our call raises
+   * {@link AlreadyClaimed} (`already-claimed`, issue 12 acceptance #3); a
+   * contended/stale claim lock raises {@link ClaimBusy} (`claim-busy` — no status
+   * was written, so the issue is still open and the dispatch is retryable). A
+   * herdr failure after a successful claim releases the in-session mutex; the
+   * issue stays claimed (there is no un-claim verb) until manually reset to
+   * `open`.
    */
   async dispatchIssue(issue: Issue): Promise<DispatchResult> {
     const outcome = dispatch(issue);
@@ -155,6 +170,11 @@ export class DispatchCoordinator {
       return { ok: false, issue, command, reason: "already-dispatched" };
     }
     try {
+      // The atomic, cross-process mutex intent: Status → claimed, written before
+      // any work. This is the authoritative claim — two processes cannot both
+      // flip it — so a race won between our load and here surfaces as
+      // AlreadyClaimed (caught below), not a double-dispatch.
+      const claimed = await this.deps.provider.claim(issue.id);
       const profile = resolveProfile(this.deps.profiles, profileKeyFor(issue));
       const name = sessionNameFor(issue.id);
       const { paneId } = await this.deps.client.createTab({
@@ -165,11 +185,24 @@ export class DispatchCoordinator {
       this.deps.claims.setPaneId(issue.id, paneId);
       await this.deps.client.startAgent({ name, kind: profile.kind, pane: paneId, args: profile.args });
       await this.deps.client.prompt(name, command, paneId);
-      return { ok: true, issue, command, paneId, kind: profile.kind, args: profile.args };
+      return { ok: true, issue: claimed, command, paneId, kind: profile.kind, args: profile.args };
     } catch (e) {
-      // The handoff failed (herdr error, etc.) — release the mutex so the user
-      // can retry. The mutex is held only across a successful handoff, until
-      // reconcileClaims observes the implement skill's status write.
+      // A concurrent dispatcher won the claim race — free the in-session mutex
+      // and report it; the issue is safely held by the other dispatcher.
+      if (e instanceof AlreadyClaimed) {
+        this.deps.claims.release(issue.id);
+        return { ok: false, issue, command, reason: "already-claimed" };
+      }
+      // The claim lock is contended or stale (ClaimBusy). The critical section
+      // never ran, so no status was written — the issue is still open. Free the
+      // in-session mutex; a retry can succeed once the lock clears.
+      if (e instanceof ClaimBusy) {
+        this.deps.claims.release(issue.id);
+        return { ok: false, issue, command, reason: "claim-busy" };
+      }
+      // The handoff failed (herdr error, etc.) — release the in-session mutex so
+      // a retry is possible after the issue is reset to `open`. The provider
+      // exposes no un-claim, so the claim itself stays until a manual reset.
       this.deps.claims.release(issue.id);
       throw e;
     }
@@ -177,10 +210,11 @@ export class DispatchCoordinator {
 
   /**
    * Sync the in-session mutex with tracker status after a reload/poll. The
-   * implement skill writes status from another pane; this releases ids whose
-   * work is finished (`resolved`) or was reset back to `open` after the skill
-   * had confirmed it (`claimed` → `open`), so they can be re-dispatched. An
-   * `open` id that was never confirmed is still in the handoff window — keep it.
+   * implement skill resolves the issue from another pane when it finishes; this
+   * releases ids whose work is done (`resolved`) or was reset back to `open`
+   * after we had confirmed our claim (`claimed` → `open`), so they can be
+   * re-dispatched. An `open` id that was never confirmed is still in the
+   * pre-reload window (claim just written, not yet observed) — keep it.
    */
   reconcileClaims(issues: Issue[]): void {
     for (const id of this.deps.claims.ids()) {
@@ -197,18 +231,18 @@ export class DispatchCoordinator {
   }
 
   /**
-   * Release dispatches whose herdr tab was closed before the implement skill
-   * ever claimed (status never reached `claimed`). Without this, closing a tab
-   * mid-handoff would leave the issue pinned as "already dispatched" forever.
-   * Confirmed dispatches are skipped — the tracker status owns those. A grace
-   * window (default 10s) after dispatch avoids racing the agent's registration
-   * in `herdr agent list`.
+   * Release dispatches whose herdr tab was closed before our claim was first
+   * observed on a reload (status never reached `claimed` in this session's
+   * view). Without this, closing a tab in that window would leave the issue
+   * pinned as "already dispatched" forever. Confirmed dispatches are skipped —
+   * the tracker status owns those. A grace window (default 10s) after dispatch
+   * avoids racing the agent's registration in `herdr agent list`.
    */
   async reconcileDeadDispatches(): Promise<void> {
     const grace = this.deps.deadDispatchGraceMs ?? 10_000;
     const now = Date.now();
     const candidates = this.deps.claims.ids().filter((id) => {
-      if (this.deps.claims.isConfirmed(id)) return false; // implement owns it now
+      if (this.deps.claims.isConfirmed(id)) return false; // claim observed — status owns it
       const at = this.deps.claims.dispatchedAtOf(id);
       return at != null && now - at >= grace && this.deps.claims.paneIdOf(id) != null;
     });
@@ -221,7 +255,7 @@ export class DispatchCoordinator {
     for (const id of candidates) {
       const pane = this.deps.claims.paneIdOf(id);
       if (pane && !alive.has(pane)) {
-        this.deps.claims.release(id); // tab closed / agent gone, never claimed
+        this.deps.claims.release(id); // tab closed / agent gone before claim observed
       }
     }
   }

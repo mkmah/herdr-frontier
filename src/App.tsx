@@ -107,11 +107,12 @@ export const App: Component<AppProps> = (props) => {
     onCleanup(() => clearInterval(id));
   });
 
-  // Background poll — the implement skill owns the open→claimed→resolved
-  // lifecycle and writes it from another pane; refresh so the list reflects
-  // reality, and reconcile the in-session claim mutex so an issue reset back to
-  // open becomes re-dispatchable. Silent: never resets selection or flashes a
-  // loading state (that's what `r` / load() are for).
+  // Background poll — the coordinator claims on dispatch (`open→claimed`) and
+  // the implement skill resolves on completion (`claimed→resolved`), both from
+  // other panes; refresh so the list reflects reality, and reconcile the
+  // in-session claim mutex so an issue reset back to open becomes
+  // re-dispatchable. Silent: never resets selection or flashes a loading state
+  // (that's what `r` / load() are for).
   async function poll() {
     if (!props.dispatchCoordinator) return;
     try {
@@ -153,15 +154,18 @@ export const App: Component<AppProps> = (props) => {
       const r = await props.dispatchCoordinator.dispatchIssue(sel);
       if (r.ok) {
         setDispatchState({ status: "ok", issueId: sel.id, paneId: r.paneId, command: r.command });
-        // We don't flip the issue's status here — the implement skill owns the
-        // open→claimed→resolved lifecycle; the background poll picks up its write.
+        // The coordinator has already atomically claimed (`Status: claimed`) via
+        // the provider before agent start; the background poll reflects it in the
+        // list row. Resolution (`→ resolved`) is the implement skill's, later.
       } else {
         const msg =
           r.reason === "already-dispatched"
             ? "already dispatched this session"
             : r.reason === "already-claimed"
               ? "already claimed by another dispatcher"
-              : "human turn — not auto-dispatched";
+              : r.reason === "claim-busy"
+                ? "claim lock busy — try again"
+                : "human turn — not auto-dispatched";
         setDispatchState({ status: "error", issueId: sel.id, message: msg });
       }
     } catch (e) {

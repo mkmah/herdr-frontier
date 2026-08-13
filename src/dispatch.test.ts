@@ -13,6 +13,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   AlreadyClaimed,
+  ClaimBusy,
   IssueNotFound,
   type Issue,
   type IssueDetail,
@@ -103,9 +104,9 @@ const CWD = "/repo";
 
 function harness(
   issues: IssueDetail[],
-  over: { fixtures?: Record<string, string>; grace?: number } = {},
+  over: { fixtures?: Record<string, string>; grace?: number; provider?: FakeProvider } = {},
 ) {
-  const provider = new FakeProvider(issues);
+  const provider = over.provider ?? new FakeProvider(issues);
   const claims = new ClaimRegistry();
   const { runner, calls } = recordingRunner({
     "api schema --json": SCHEMA,
@@ -150,9 +151,10 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(result.args).toEqual(["-m", "claude-sonnet-4-5"]);
     expect(result.paneId).toBe("wZ:p3");
 
-    // We don't write status — the implement skill owns the lifecycle. The
-    // provider record stays open until the dispatched agent claims it.
-    expect((await h.provider.readIssue(ID)).status).toBe("open");
+    // The dispatcher claims atomically BEFORE any work (issue 12 acceptance #1):
+    // `Status: claimed` is written before the agent is ever started — the
+    // cross-process mutex intent, not something left to the agent.
+    expect((await h.provider.readIssue(ID)).status).toBe("claimed");
 
     // The herdr invocations: tab → agent start → (lazy schema introspection, at
     // first start-agent) → prompt, in schema-driven order.
@@ -180,6 +182,42 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     const result = await h.coordinator.dispatchIssue(mk({ status: "claimed" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("already-claimed");
+    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
+  });
+
+  it("surfaces a cross-process race: provider.claim throws AlreadyClaimed between load and dispatch", async () => {
+    // The loaded snapshot was `open`, but a concurrent process claimed it
+    // between our load and our dispatch — the authoritative `provider.claim`
+    // throws AlreadyClaimed (the cross-process mutex doing its job, issue 12
+    // acceptance #3). We surface it as already-claimed, free the in-session
+    // mutex, and never reach herdr.
+    const contended = new FakeProvider([mk()]); // starts open
+    await contended.claim(ID); // another process wins the race
+    const h = harness([mk()], { provider: contended });
+    // We pass the stale `open` snapshot (what we loaded before the race).
+    const result = await h.coordinator.dispatchIssue(mk({ status: "open" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("already-claimed");
+    expect(h.claims.tryClaim(ID)).toBe(true); // session mutex freed for retry
+    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
+  });
+
+  it("surfaces ClaimBusy (contended/stale lock) as a retryable claim-busy failure", async () => {
+    // The provider's claim lock is contended or stale — `provider.claim` raises
+    // ClaimBusy. The critical section never ran, so the issue is STILL open (no
+    // status write) and the dispatch is retryable once the lock clears. We surface
+    // it as claim-busy, free the in-session mutex, and never reach herdr.
+    class BusyProvider extends FakeProvider {
+      override async claim(): Promise<Issue> {
+        throw new ClaimBusy(ID);
+      }
+    }
+    const h = harness([mk()], { provider: new BusyProvider([mk()]) });
+    const result = await h.coordinator.dispatchIssue(mk());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("claim-busy");
+    expect(h.claims.tryClaim(ID)).toBe(true); // session mutex freed — retryable
+    expect((await h.provider.readIssue(ID)).status).toBe("open"); // no write happened
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
   });
 
