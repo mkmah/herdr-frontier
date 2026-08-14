@@ -75,6 +75,7 @@ describe("appKeyAction — the key bindings (issue 14 stop)", () => {
     expect(appKeyAction({ name: "return" })).toBe("dispatch");
     expect(appKeyAction({ name: "x" })).toBe("release");
     expect(appKeyAction({ name: "r" })).toBe("reload");
+    expect(appKeyAction({ name: "t" })).toBe("toggle-view");
     expect(appKeyAction({ name: "z" })).toBeNull();
   });
 });
@@ -331,6 +332,75 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("1 pending");
     expect(frame).toContain("s run");
     expect(frame).toContain("S stop+release");
+    setup.renderer.destroy();
+  });
+
+  // Issue 15 acceptance: the secondary dependency-tree view renders a forward
+  // forest (lean tree pane on top + scrollable detail pane below) when the
+  // initial view is the tree — tree connectors, lean rows (icon · #id · title
+  // · tasks · age), and the selected node's full detail below.
+  it("renders the dependency-tree secondary view (lean tree + detail below)", async () => {
+    const root = mk({
+      id: ".scratch/herdr-beads/issues/01-a.md",
+      title: "01 — Alpha",
+      status: "claimed",
+      labels: ["ready-for-agent", "wayfinder:task"],
+      tasks: { done: 2, total: 4 },
+      updatedAt: Date.now() - 5 * 3_600_000,
+    });
+    const child = mk({
+      id: ".scratch/herdr-beads/issues/02-b.md",
+      title: "02 — Beta",
+      blockedBy: ["01"],
+    });
+    const detail: IssueDetail = {
+      ...root,
+      body: "Root issue body for the tree detail pane.",
+      comments: [],
+    };
+    const setup = await testRender(
+      () => (
+        <App
+          provider={noopProvider}
+          initialIssues={[root, child]}
+          initialDetail={detail}
+          initialView="tree"
+        />
+      ),
+      { width: 100, height: 44 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // tree pane (top) — title + a forward-forest connector + lean row fields
+    expect(frame).toContain("Dependencies");
+    expect(frame).toContain("└─");
+    expect(frame).toContain("#01");
+    expect(frame).toContain("Alpha");
+    expect(frame).toContain("2/4");
+    expect(frame).toContain("5h");
+    // detail pane (below) — the selected node's chips + deps + body + launch
+    expect(frame).toContain("Detail");
+    expect(frame).toContain("ready-for-agent");
+    expect(frame).toContain("wayfinder:task");
+    expect(frame).toContain("blocked by:");
+    expect(frame).toContain("Root issue body for the tree detail pane.");
+    expect(frame).toContain("/wayfinder .scratch/herdr-beads/issues/01-a.md");
+    // the primary list pane is not in this view
+    expect(frame).not.toContain(" Issues ");
+    setup.renderer.destroy();
+  });
+
+  // Issue 15 acceptance: the primary list is the default view — the tree
+  // connectors must not leak into it (the tree is a toggleable secondary view).
+  it("keeps the tree out of the default (list) view", async () => {
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[mk()]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("Dependencies");
+    expect(frame).not.toContain("└─");
     setup.renderer.destroy();
   });
 });
