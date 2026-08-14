@@ -12,11 +12,13 @@
 
 import { render, useRenderer } from "@opentui/solid";
 import { onMount } from "solid-js";
+import { join } from "node:path";
 import { LocalMarkdownProvider } from "./tracker/local-markdown.js";
 import { App } from "./App.js";
 import { claimHerdrPrefix } from "./prefix.js";
 import { HerdrClient, makeProcessRunner } from "./herdr-client.js";
 import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
+import { RunController, FileRunStore, pluginStateDir } from "./run.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
 
 const repoRoot = process.cwd();
@@ -30,6 +32,14 @@ const dispatchCoordinator = new DispatchCoordinator({
   claims: new ClaimRegistry(),
   cwd: repoRoot,
 });
+// Issue 14: the automated run-controller — same provider, same shared claim
+// mutex (the coordinator's ClaimRegistry), state persisted under the plugin
+// state dir so a crashed controller rehydrates the same runs on restart.
+const runController = new RunController({
+  provider,
+  coordinator: dispatchCoordinator,
+  store: new FileRunStore({ dir: join(pluginStateDir(), "runs") }),
+});
 
 function Root() {
   // Claim ctrl+a on mount — before OpenTUI's own key dispatch (see prefix.ts).
@@ -40,6 +50,7 @@ function Root() {
     <App
       provider={provider}
       dispatchCoordinator={dispatchCoordinator}
+      runController={runController}
       onQuit={() => renderer.destroy()}
     />
   );

@@ -24,6 +24,7 @@ import {
   type Row,
 } from "./logic.js";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
+import type { RunController } from "./run.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
   id: ".scratch/e/issues/01-x.md",
@@ -268,6 +269,44 @@ describe("App (initial render smoke — two-pane shell)", () => {
     );
     await setup.flush();
     expect(setup.captureCharFrame()).toContain("x stop+reopen");
+    setup.renderer.destroy();
+  });
+
+  // Issue 14: the detail pane shows the run-controller's status for the
+  // selected issue's run-root, and the footer advertises the s start-run key.
+  it("shows the run status line for the selected issue's run-root and the s key", async () => {
+    const issue = mk({ id: ".scratch/e/issues/01-x.md" });
+    const detail: IssueDetail = { ...issue, body: "", comments: [] };
+    const runController = {
+      load: () => ({
+        id: "run-e",
+        root: "e",
+        status: "running",
+        concurrency: 3,
+        startedAt: Date.now(),
+        issues: [
+          { id: issue.id, status: "dispatched" },
+          { id: ".scratch/e/issues/02-y.md", status: "pending" },
+        ],
+      }),
+    } as unknown as RunController;
+    const setup = await testRender(
+      () => (
+        <App
+          provider={noopProvider}
+          initialIssues={[issue]}
+          initialDetail={detail}
+          runController={runController}
+        />
+      ),
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("run: running");
+    expect(frame).toContain("1 in-flight");
+    expect(frame).toContain("1 pending");
+    expect(frame).toContain("s run");
     setup.renderer.destroy();
   });
 });

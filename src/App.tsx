@@ -20,9 +20,11 @@ import { MouseButton, TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import type { AgentStatus } from "./herdr-client.js";
+import type { RunController } from "./run.js";
 import {
   blockerResolved,
   buildRows,
+  effortOf,
   issueNum,
   moveCursor,
   sortIssues,
@@ -44,6 +46,8 @@ export interface AppProps {
   onQuit?: () => void;
   /** Manual single-issue dispatch (issue 12). Production builds one in index.tsx. */
   dispatchCoordinator?: DispatchCoordinator;
+  /** Automated run-controller (issue 14). Production builds one in index.tsx. */
+  runController?: RunController;
 }
 
 /** The detail pane's dispatch feedback, scoped to the issue it dispatched. */
@@ -91,6 +95,9 @@ export const App: Component<AppProps> = (props) => {
   // Live agent state (issue 13): issue-id → agent_status from the ~2s poll.
   // Empty until the first poll; the rows fall back to the issue's own status.
   const [agentStates, setAgentStates] = createSignal<Map<string, AgentStatus>>(new Map());
+  // Run-controller pulse (issue 14): bumped after start/stop/step so the detail
+  // pane's run-status line remounts with fresh run state.
+  const [runVersion, setRunVersion] = createSignal(0);
 
   async function load() {
     setLoaded(false);
@@ -141,6 +148,11 @@ export const App: Component<AppProps> = (props) => {
       // signal so the list rows render live status.
       const states = await props.dispatchCoordinator.reconcileAttention(fresh);
       setAgentStates(states);
+      // Automated run-controller (issue 14): step every running run on the same
+      // fresh snapshot — dispatch each issue whose blockers have cleared, up to
+      // the per-run concurrency cap. Runs share the coordinator's claim mutex.
+      await props.runController?.stepAll(fresh);
+      setRunVersion((v) => v + 1);
     } catch {
       // Background poll failures are non-fatal — the next tick retries.
     }
@@ -219,6 +231,21 @@ export const App: Component<AppProps> = (props) => {
     }
   }
 
+  // --- automated run (issue 14) --------------------------------------------
+  // `s` starts a run bound to the selected Issue's run-root (its effort — the
+  // directory a map/spec/to-tickets set lives in). The controller walks that
+  // graph, dispatching each issue as its blockers clear; the poll loop steps it.
+  async function startRun() {
+    const sel = selected();
+    if (!sel || !props.runController) return;
+    try {
+      await props.runController.start(effortOf(sel.id));
+      setRunVersion((v) => v + 1);
+    } catch {
+      // surfaced next poll — start failures are non-fatal
+    }
+  }
+
   // --- mouse support (prototype 08's behavior, applied to the real shell) ---
   // Click a row = select + focus the list. Wheel over the list = move the
   // cursor. Click the detail pane = focus detail. Double-click a row = dispatch
@@ -255,6 +282,7 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "k" || key.name === "up") move(-1);
     else if (key.name === "return") void doDispatch();
     else if (key.name === "x") void doRelease();
+    else if (key.name === "s") void startRun();
     else if (key.name === "r") void load();
   });
 
@@ -307,7 +335,7 @@ export const App: Component<AppProps> = (props) => {
       ds.status === "idle" ? "I" : ds.status === "running" ? "R" : ds.status === "ok" ? `ok:${ds.paneId}` : "E";
     const rs = releaseState();
     const releasePart = rs.status === "idle" ? "I" : rs.status === "running" ? "R" : rs.status === "ok" ? `ok:${rs.tabClosed ? 1 : 0}` : "E";
-    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}|${dispatchPart}|${releasePart}`;
+    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}|${dispatchPart}|${releasePart}|${runVersion()}`;
   });
 
   const openCount = () => issues().filter((i) => i.status === "open").length;
@@ -483,6 +511,25 @@ export const App: Component<AppProps> = (props) => {
                         {dispatchable ? outcome.command : "(no auto-dispatch — human turn)"}
                       </text>
                     </box>
+                    {(() => {
+                      const run = props.runController?.load(effortOf(sel.id));
+                      if (!run) return null;
+                      const inflight = run.issues.filter((i) => i.status === "dispatched").length;
+                      const pending = run.issues.filter((i) => i.status === "pending").length;
+                      const done = run.issues.filter((i) => i.status === "resolved").length;
+                      const failed = run.issues.filter((i) => i.status === "failed").length;
+                      return (
+                        <box flexDirection="row" paddingTop={1}>
+                          <RoleText role="meta">run: </RoleText>
+                          <text
+                            fg={run.status === "running" ? THEME.state.running : THEME.state.done}
+                            attributes={TextAttributes.BOLD}
+                          >
+                            {`${run.status} · ${inflight} in-flight · ${pending} pending · ${done} done${failed ? ` · ${failed} failed` : ""}`}
+                          </text>
+                        </box>
+                      );
+                    })()}
                     <text fg={THEME.text.dimmer}>{""}</text>
                     {showDispatch ? (
                       <text
@@ -537,7 +584,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}
