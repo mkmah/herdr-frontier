@@ -97,6 +97,44 @@ describe("iconFor precedence: done > human > running > blocked > frontier", () =
   });
 });
 
+// Issue 13: agent-blocked is a human-turn (CONTEXT.md: Attention lane — label
+// state PLUS agent state). A dispatched agent that went `blocked` shows the same
+// pulsing ☻ as a `ready-for-human` issue — it needs a human now.
+describe("iconFor / isHumanTurn: agent-blocked attention (issue 13)", () => {
+  const resolved = () => false;
+  it("shows ☻ for a claimed issue whose dispatched agent is blocked", () => {
+    expect(iconFor(mk({ status: "claimed" }), resolved, "blocked").glyph).toBe("☻");
+    expect(iconFor(mk({ status: "claimed" }), resolved, "blocked").state).toBe("human");
+  });
+  it("shows ⟳ for a claimed issue whose agent is working/idle/done (not blocked)", () => {
+    expect(iconFor(mk({ status: "claimed" }), resolved, "working").glyph).toBe("⟳");
+    expect(iconFor(mk({ status: "claimed" }), resolved, "idle").glyph).toBe("⟳");
+    expect(iconFor(mk({ status: "claimed" }), resolved, "done").glyph).toBe("⟳");
+  });
+  it("agent-blocked beats a dependency blocker (human attention > blocked)", () => {
+    expect(iconFor(mk({ status: "claimed", blockedBy: ["05"] }), resolved, "blocked").glyph).toBe("☻");
+  });
+  it("a resolved issue stays ✓ even if its agent is blocked (done > human)", () => {
+    expect(iconFor(mk({ status: "resolved" }), resolved, "blocked").glyph).toBe("✓");
+  });
+  it("a label human-turn still shows ☻ regardless of agent status", () => {
+    expect(iconFor(mk({ status: "claimed", labels: ["ready-for-human"] }), resolved, "working").glyph).toBe("☻");
+  });
+  it("isHumanTurn is true for an agent-blocked claimed issue", () => {
+    expect(isHumanTurn(mk({ status: "claimed" }), "blocked")).toBe(true);
+    expect(isHumanTurn(mk({ status: "claimed" }), "working")).toBe(false);
+  });
+  it("isHumanTurn stays true for a label human-turn regardless of agent status", () => {
+    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }), "working")).toBe(true);
+    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }), undefined)).toBe(true);
+  });
+  it("isHumanTurn without agent status matches the old behavior (label only)", () => {
+    // Backward-compat: the optional second arg keeps every existing call site.
+    expect(isHumanTurn(mk({ labels: ["ready-for-agent"] }))).toBe(false);
+    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }))).toBe(true);
+  });
+});
+
 describe("humanizeAge", () => {
   const now = 1_000_000_000_000;
   it("humanizes down to now / m / h / d / w / mo", () => {

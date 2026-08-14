@@ -335,6 +335,130 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.claims.has(ID)).toBe(true); // within grace — not yet eligible
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "list")).toBe(false); // didn't even query
   });
+
+  it("pollAgentStates maps the live agent list onto dispatched issues (issue 13)", async () => {
+    // The ~2s poll's payload: for each in-flight dispatch, the agent_status of
+    // the pane it landed in. The coordinator owns the pane-id mapping; the pure
+    // mapping lives in agent-state.ts. Here we wire the seam end-to-end.
+    const h = harness(
+      [mk()],
+      {
+        fixtures: {
+          "agent list": ok({
+            agents: [
+              { agent: "opencode", agent_status: "blocked", pane_id: "wZ:p3" }, // our dispatch
+              { agent: "claude", agent_status: "working", pane_id: "wW:other" }, // foreign pane
+            ],
+          }),
+        },
+      },
+    );
+    await h.coordinator.dispatchIssue(mk()); // claims + creates pane wZ:p3
+    const states = await h.coordinator.pollAgentStates();
+    expect(states.get(ID)).toBe("blocked");
+    expect(states.size).toBe(1); // the foreign pane isn't ours
+  });
+
+  it("pollAgentStates drops an issue whose pane is gone (no stale entry)", async () => {
+    const h = harness(
+      [mk()],
+      { fixtures: { "agent list": ok({ agents: [] }) } }, // our pane vanished
+    );
+    await h.coordinator.dispatchIssue(mk());
+    const states = await h.coordinator.pollAgentStates();
+    expect(states.has(ID)).toBe(false);
+  });
+});
+
+// Issue 13: the attention watcher — diffs successive snapshots and fires a
+// `herdr notification show` toast when an issue newly needs a human (became
+// ready-for-human, or its dispatched agent went blocked). The coordinator owns
+// the herdr client + the prev-state memory; the pure diff lives in agent-state.ts.
+describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
+  it("fires a notification when an issue newly becomes ready-for-human", async () => {
+    const h = harness(
+      [mk({ labels: ["ready-for-agent"] })],
+      { fixtures: { "agent list": ok({ agents: [] }) } },
+    );
+    // First tick — baseline, no transitions (the provider still shows the old label).
+    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-agent"] })]);
+    expect(h.calls.some((c) => c[0] === "notification")).toBe(false);
+    // Second tick — the tracker now shows ready-for-human → fire the toast.
+    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]);
+    const note = h.calls.find((c) => c[0] === "notification");
+    expect(note).toBeDefined();
+    expect(note![1]).toBe("show");
+    expect(note![2]).toContain("#12"); // the title carries the issue id
+    expect(note!).toContain("--sound"); // the handoff beat (research 01 §4)
+    expect(note!).toContain("request");
+  });
+
+  it("fires a notification when a dispatched agent newly goes blocked", async () => {
+    // The issue is dispatched (claimed). First poll the agent is working; the
+    // next poll it goes blocked → fire the toast. The harness fixture map is
+    // immutable per test, so use a scripted runner that advances `agent list`
+    // through a working → blocked → blocked sequence.
+    const open = mk({ status: "open" }); // what dispatchIssue sees
+    const claimed = mk({ status: "claimed" }); // what the tracker shows after claim
+    const script = [
+      ok({ agents: [{ agent: "opencode", agent_status: "working", pane_id: "wZ:p3" }] }),
+      ok({ agents: [{ agent: "opencode", agent_status: "blocked", pane_id: "wZ:p3" }] }),
+      ok({ agents: [{ agent: "opencode", agent_status: "blocked", pane_id: "wZ:p3" }] }),
+    ];
+    let listStep = 0;
+    const calls: string[][] = [];
+    const scriptedRunner: HerdrRunner = async (args) => {
+      calls.push(args);
+      const key = args.join(" ");
+      if (key === "agent list") {
+        return { code: 0, stdout: script[listStep++] ?? script[script.length - 1]!, stderr: "" };
+      }
+      if (key === "api schema --json") return { code: 0, stdout: SCHEMA, stderr: "" };
+      if (key === `tab create --cwd ${CWD} --label 12 — Driver --no-focus`) return { code: 0, stdout: TAB_OK, stderr: "" };
+      if (key === "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5") {
+        return { code: 0, stdout: ok({}), stderr: "" };
+      }
+      if (key === `agent prompt herdr-beads-12 /implement ${ID}`) return { code: 0, stdout: ok({}), stderr: "" };
+      if (key.startsWith("notification show")) return { code: 0, stdout: ok({}), stderr: "" };
+      return { code: 1, stdout: "", stderr: `no fixture for: ${key}` };
+    };
+    const provider = new FakeProvider([open]); // starts open → dispatch can claim
+    const claims = new ClaimRegistry();
+    const client = new HerdrClient({ runner: scriptedRunner });
+    const coordinator = new DispatchCoordinator({
+      client, provider, profiles: PROFILES, claims, cwd: CWD,
+    });
+    await coordinator.dispatchIssue(open); // claims + creates pane wZ:p3
+    await coordinator.reconcileAttention([claimed]); // tick 1: working → no toast
+    expect(calls.some((c) => c[0] === "notification")).toBe(false);
+    await coordinator.reconcileAttention([claimed]); // tick 2: blocked → toast fires
+    expect(calls.filter((c) => c[0] === "notification")).toHaveLength(1);
+    await coordinator.reconcileAttention([claimed]); // tick 3: stays blocked → no re-fire
+    expect(calls.filter((c) => c[0] === "notification")).toHaveLength(1);
+  });
+
+  it("does not re-fire while the human-turn state persists (idempotent)", async () => {
+    const h = harness([mk()], { fixtures: { "agent list": ok({ agents: [] }) } });
+    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-agent"] })]); // prime (no fire)
+    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]); // transition → fires
+    expect(h.calls.filter((c) => c[0] === "notification")).toHaveLength(1);
+    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]); // stays — no re-fire
+    expect(h.calls.filter((c) => c[0] === "notification")).toHaveLength(1);
+  });
+
+  it("returns the live agent-state map for the signal (issue-id → status)", async () => {
+    const h = harness(
+      [mk()], // open → dispatch can claim
+      {
+        fixtures: {
+          "agent list": ok({ agents: [{ agent: "opencode", agent_status: "blocked", pane_id: "wZ:p3" }] }),
+        },
+      },
+    );
+    await h.coordinator.dispatchIssue(mk()); // claims + creates pane wZ:p3
+    const states = await h.coordinator.reconcileAttention([mk({ status: "claimed" })]);
+    expect(states.get(ID)).toBe("blocked");
+  });
 });
 
 describe("ClaimRegistry (tab tracking)", () => {

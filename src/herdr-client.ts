@@ -58,6 +58,19 @@ export interface StartOptions {
 }
 
 /**
+ * Options for {@link HerdrClient.showNotification}. The toast's title is the
+ * one required positional; the rest mirror herdr's `notification show` flags
+ * (research 01 §4). `sound: "request"` is the natural fit for the
+ * ready-for-human / agent-blocked handoff beat.
+ */
+export interface ShowNotificationOptions {
+  /** The toast title — the single required positional (`notification show <TITLE>`). */
+  title: string;
+  body?: string;
+  sound?: "none" | "done" | "request";
+}
+
+/**
  * `agent start <name> --kind <kind> --pane <pane> [-- <args>]`. On the older
  * `argv` variant of the schema the kind moves into the passthrough args
  * (`-- <kind> <args>`), mirroring wayfinder's portability shim (research 01 §2).
@@ -208,6 +221,20 @@ export class HerdrClient {
   /** `herdr tab close <tab_id>` — closes the tab (and its panes) a dispatch spawned. */
   async closeTab(tabId: string): Promise<void> {
     await this.run(["tab", "close", tabId]);
+  }
+
+  /**
+   * `herdr notification show <title> [--body --sound]` — the
+   * ready-for-human / agent-blocked handoff toast (issue 13). herdr exposes
+   * only `show` (no list/dismiss/mute), so this is fire-and-forget. The title
+   * is one positional arg (no shell quoting concerns — the runner execs the
+   * vector directly, never through a shell).
+   */
+  async showNotification(o: ShowNotificationOptions): Promise<void> {
+    const args = ["notification", "show", o.title];
+    if (o.body != null) args.push("--body", o.body);
+    if (o.sound != null) args.push("--sound", o.sound);
+    await this.run(args);
   }
 
   /**

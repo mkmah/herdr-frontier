@@ -29,6 +29,16 @@ export function effortOf(id: string): string {
 /** The canonical labels that mean "a human must look at this" (CONTEXT.md: attention). */
 export const HUMAN_ROLES: ReadonlySet<string> = new Set(["ready-for-human", "needs-info", "needs-triage"]);
 
+/**
+ * True when the issue's triage role is a human label (CONTEXT.md: attention) —
+ * `ready-for-human` / `needs-info` / `needs-triage`. The single shared
+ * definition of "human turn by LABEL"; the display layer's `isHumanTurn` adds
+ * the agent-`blocked` path on top (label state PLUS agent state).
+ */
+export function isLabelHumanTurn(issue: Issue): boolean {
+  return HUMAN_ROLES.has(triageOf(issue));
+}
+
 /** The leading decimal digits of an id's filename, or null when it has none. */
 function numPrefixRaw(id: string): string | null {
   const file = id.split("/").pop() ?? id;

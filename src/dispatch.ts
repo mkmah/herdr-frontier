@@ -14,7 +14,8 @@
 import { dispatch } from "./orchestrator.js";
 import { effortOf, issueNum, trunc } from "./logic.js";
 import { AlreadyClaimed, ClaimBusy, type Issue, type TrackerProvider } from "./tracker/provider.js";
-import { HerdrClient } from "./herdr-client.js";
+import { HerdrClient, type AgentStatus } from "./herdr-client.js";
+import { attentionTransitions, mapAgentStates } from "./agent-state.js";
 import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.js";
 
 /**
@@ -158,6 +159,12 @@ export type ReleaseResult =
   | { ok: false; issue: Issue; message: string };
 
 export class DispatchCoordinator {
+  /** The attention watcher's prev-snapshot memory (issue 13) — drives the diff
+   *  that decides which issues newly need a human (→ `herdr notification show`).
+   *  `null` until the first poll primes the baseline (avoids startup toast spam
+   *  for issues that were already human-turn before the pane opened). */
+  private prevAttention: { issues: Issue[]; agentStates: Map<string, AgentStatus> } | null = null;
+
   constructor(private readonly deps: DispatchDeps) {}
 
   /**
@@ -323,4 +330,79 @@ export class DispatchCoordinator {
       }
     }
   }
+
+  /**
+   * The ~2s poll's payload (issue 13): for each in-flight dispatch, the
+   * `agent_status` (`working`/`idle`/`blocked`/`done`) of the herdr pane it
+   * landed in — fed into Solid signals so the list rows update live. The
+   * coordinator owns the issue-id → pane-id mapping (the `ClaimRegistry`); the
+   * pure pane→status mapping lives in `agent-state.ts`. An issue whose pane is
+   * gone (tab closed / agent vanished) simply drops out, which the display
+   * layer reads as "no live state" and falls back to the issue's own status.
+   * Failures are surfaced to the caller (the poll loop treats them as
+   * non-fatal — the next tick retries).
+   */
+  async pollAgentStates(): Promise<Map<string, AgentStatus>> {
+    const issueToPane = new Map<string, string>();
+    for (const id of this.deps.claims.ids()) {
+      const pane = this.deps.claims.paneIdOf(id);
+      if (pane) issueToPane.set(id, pane);
+    }
+    const agents = await this.deps.client.listAgents();
+    return mapAgentStates(agents, issueToPane);
+  }
+
+  /**
+   * The attention watcher's per-tick reconcile (issue 13): poll the live agent
+   * states, diff them against the previous tick's snapshot (issue labels +
+   * agent states), and fire a `herdr notification show` toast for each issue
+   * that newly needs a human — an Issue that became `ready-for-human` (label
+   * change) or a dispatched agent that went `blocked` (agent-status change).
+   * Idempotent across polls (stays-blocked / stays-human doesn't re-fire).
+   *
+   * Returns the fresh issue-id → `AgentStatus` map so the App can feed it into
+   * the Solid signal that drives the list rows live. The pure diff lives in
+   * `attentionTransitions` (agent-state.ts); this method owns the prev-snapshot
+   * memory + the notification side effect, keeping the herdr client behind the
+   * coordinator seam. Notification failures are swallowed (best-effort — the
+   * toast is a side-channel, not on the dispatch critical path).
+   */
+  async reconcileAttention(freshIssues: Issue[]): Promise<Map<string, AgentStatus>> {
+    const agentStates = await this.pollAgentStates();
+    // First poll — prime the baseline without firing. Otherwise every issue
+    // that was already human-turn before the pane opened would toast at startup.
+    if (this.prevAttention === null) {
+      this.prevAttention = { issues: freshIssues, agentStates };
+      return agentStates;
+    }
+    const newAttention = attentionTransitions({
+      prevIssues: this.prevAttention.issues,
+      nextIssues: freshIssues,
+      prevStates: this.prevAttention.agentStates,
+      nextStates: agentStates,
+    });
+    this.prevAttention = { issues: freshIssues, agentStates };
+    for (const issue of newAttention) {
+      try {
+        await this.deps.client.showNotification({
+          title: attentionTitle(issue, agentStates.get(issue.id)),
+          body: issue.title,
+          sound: "request", // the human-handoff beat (research 01 §4)
+        });
+      } catch {
+        // swallow — the toast is best-effort; the inline ☻ marker still surfaces it
+      }
+    }
+    return agentStates;
+  }
+}
+
+/**
+ * The toast title for a newly-needs-human issue. Carries the short `#id` (the
+ * row's identity) plus the kind of attention — `ready for human` (label) or
+ * `agent blocked` (agent state) — so the user knows which trigger fired.
+ */
+function attentionTitle(issue: Issue, agentStatus?: AgentStatus): string {
+  const why = agentStatus === "blocked" ? "agent blocked" : "ready for human";
+  return `herdr-beads: ${issueNum(issue.id)} ${why}`;
 }

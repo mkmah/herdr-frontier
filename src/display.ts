@@ -5,8 +5,9 @@
 // cycling — are unit-testable without the OpenTUI harness. The component is a
 // thin render layer over these functions; colors live in ./theme.ts.
 
+import type { AgentStatus } from "./herdr-client.js";
 import type { Issue } from "./tracker/provider.js";
-import { HUMAN_ROLES, triageOf } from "./logic.js";
+import { isLabelHumanTurn } from "./logic.js";
 
 /** List state, resolved per `Issue` (prototype 06's four-state model). */
 export type ListState = "done" | "running" | "blocked" | "frontier";
@@ -14,9 +15,19 @@ export type ListState = "done" | "running" | "blocked" | "frontier";
 /** Which pane has keyboard focus. */
 export type Focus = "list" | "detail";
 
-/** True when the issue needs a human: `ready-for-human` / `needs-info` / `needs-triage`. */
-export function isHumanTurn(issue: Issue): boolean {
-  return HUMAN_ROLES.has(triageOf(issue));
+/**
+ * True when the issue needs a human (CONTEXT.md: Attention lane — label state
+ * PLUS agent state). Two paths:
+ *  - a human label is the triage role (`ready-for-human` / `needs-info` /
+ *    `needs-triage`), OR
+ *  - a dispatched agent went `blocked` (issue 13) — the agent needs human help.
+ *
+ * `agentStatus` is the live status of the issue's pane (from the ~2s poll),
+ * or undefined when the issue isn't dispatched / its pane isn't tracked. The
+ * second arg is optional so every existing call site keeps working.
+ */
+export function isHumanTurn(issue: Issue, agentStatus?: AgentStatus): boolean {
+  return isLabelHumanTurn(issue) || agentStatus === "blocked";
 }
 
 /**
@@ -37,17 +48,19 @@ export function listStateOf(issue: Issue, isResolved: (id: string) => boolean): 
  * The state glyph for a row, plus the state it resolved to (so the theme can
  * color it with a plain stateColor lookup — the precedence lives here once).
  * Icon precedence (locked in prototype 06): done `✓` > human `☻` > running
- * `⟳` > blocked `✗` > frontier `○`.
+ * `⟳` > blocked `✗` > frontier `○`. Issue 13 adds a second path to `☻`: a
+ * dispatched agent that went `blocked` (agent state, CONTEXT.md: Attention
+ * lane) shows the same pulsing human marker as a `ready-for-human` issue.
  */
 export interface IssueIcon {
   glyph: string;
   state: ListState | "human";
 }
 
-export function iconFor(issue: Issue, isResolved: (id: string) => boolean): IssueIcon {
+export function iconFor(issue: Issue, isResolved: (id: string) => boolean, agentStatus?: AgentStatus): IssueIcon {
   const s = listStateOf(issue, isResolved);
   if (s === "done") return { glyph: "✓", state: "done" };
-  if (isHumanTurn(issue)) return { glyph: "☻", state: "human" };
+  if (isHumanTurn(issue, agentStatus)) return { glyph: "☻", state: "human" };
   if (s === "running") return { glyph: "⟳", state: "running" };
   if (s === "blocked") return { glyph: "✗", state: "blocked" };
   return { glyph: "○", state: "frontier" };

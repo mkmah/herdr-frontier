@@ -203,6 +203,37 @@ describe("HerdrClient.closeTab (canned tab close)", () => {
   });
 });
 
+// --- notification (issue 13: the ready-for-human / agent-blocked handoff) ----
+
+describe("HerdrClient.showNotification (canned notification show)", () => {
+  it("issues `notification show <title>` with the title as the first positional", async () => {
+    const { runner, calls } = fixtureRunner({
+      "notification show herdr-beads: #13 ready for human": JSON.stringify({ id: "cli:notification:show", result: {} }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.showNotification({ title: "herdr-beads: #13 ready for human" });
+    // The whole title is one positional arg (herdr notification show <TITLE>),
+    // so the shell-out passes it as a single element of the arg vector.
+    expect(calls.map((c) => c.join(" "))).toContain("notification show herdr-beads: #13 ready for human");
+    expect(calls.some((c) => c.length === 3 && c[0] === "notification" && c[1] === "show")).toBe(true);
+  });
+
+  it("adds --body / --sound when supplied", async () => {
+    const { runner, calls } = fixtureRunner({
+      "notification show t --body b --sound request": JSON.stringify({ id: "x", result: {} }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.showNotification({ title: "t", body: "b", sound: "request" });
+    expect(calls.map((c) => c.join(" "))).toContain("notification show t --body b --sound request");
+  });
+
+  it("surfaces a non-zero exit as a HerdrError (no silent notification drop)", async () => {
+    const { runner } = fixtureRunner({}); // no fixture → exit 1
+    const client = new HerdrClient({ runner });
+    await expect(client.showNotification({ title: "t" })).rejects.toThrow(/notification show t exited 1/);
+  });
+});
+
 // --- prompt-API shim --------------------------------------------------------
 
 describe("HerdrClient.prompt — the prompt-API shim (issue 12)", () => {

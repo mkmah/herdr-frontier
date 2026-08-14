@@ -19,6 +19,7 @@ import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, 
 import { MouseButton, TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
+import type { AgentStatus } from "./herdr-client.js";
 import {
   blockerResolved,
   buildRows,
@@ -87,6 +88,9 @@ export const App: Component<AppProps> = (props) => {
   const [dispatchState, setDispatchState] = createSignal<DispatchUi>({ status: "idle" });
   const [releaseState, setReleaseState] = createSignal<ReleaseUi>({ status: "idle" });
   const [tick, setTick] = createSignal(0); // attention pulse
+  // Live agent state (issue 13): issue-id → agent_status from the ~2s poll.
+  // Empty until the first poll; the rows fall back to the issue's own status.
+  const [agentStates, setAgentStates] = createSignal<Map<string, AgentStatus>>(new Map());
 
   async function load() {
     setLoaded(false);
@@ -119,8 +123,12 @@ export const App: Component<AppProps> = (props) => {
   // the implement skill resolves on completion (`claimed→resolved`), both from
   // other panes; refresh so the list reflects reality, and reconcile the
   // in-session claim mutex so an issue reset back to open becomes
-  // re-dispatchable. Silent: never resets selection or flashes a loading state
-  // (that's what `r` / load() are for).
+  // re-dispatchable. Issue 13: the ~2s poll also feeds each dispatched issue's
+  // live agent_status into the `agentStates` signal (rows update live) and
+  // fires a herdr notification when an issue newly needs a human (became
+  // `ready-for-human` or its dispatched agent went `blocked`) — the ~2s cadence
+  // is the proven reference pattern (research 01). Silent: never resets
+  // selection or flashes a loading state (that's what `r` / load() are for).
   async function poll() {
     if (!props.dispatchCoordinator) return;
     try {
@@ -128,18 +136,26 @@ export const App: Component<AppProps> = (props) => {
       setIssues(fresh);
       props.dispatchCoordinator.reconcileClaims(fresh);
       await props.dispatchCoordinator.reconcileDeadDispatches();
+      // Agent-state poll + attention transitions → notifications (issue 13).
+      // reconcileAttention returns the fresh agent-state map; feed it into the
+      // signal so the list rows render live status.
+      const states = await props.dispatchCoordinator.reconcileAttention(fresh);
+      setAgentStates(states);
     } catch {
       // Background poll failures are non-fatal — the next tick retries.
     }
   }
   onMount(() => {
-    const id = setInterval(poll, 5000);
+    const id = setInterval(poll, 2000);
     onCleanup(() => clearInterval(id));
   });
 
   const rows = createMemo(() => buildRows({ issues: issues(), loaded: loaded(), error: error() }));
   const selected = () => issues()[cursor()];
   const pulse = () => tick() === 1;
+  // The live agent_status of an issue's dispatched pane (issue 13), or
+  // undefined when it isn't dispatched / its pane isn't tracked.
+  const agentStatusOf = (issue: Issue): AgentStatus | undefined => agentStates().get(issue.id);
 
   // A blocker id ("10") resolves against the loaded issue set, scoped to the
   // referencing issue's effort so `"05"` in two efforts can't cross-match.
@@ -295,7 +311,7 @@ export const App: Component<AppProps> = (props) => {
   });
 
   const openCount = () => issues().filter((i) => i.status === "open").length;
-  const yourTurn = () => issues().filter(isHumanTurn).length;
+  const yourTurn = () => issues().filter((i) => isHumanTurn(i, agentStatusOf(i))).length;
 
   // --- list row -----------------------------------------------------------
   // Selection is a full-row background; a keyed <Show> remounts the row when
@@ -307,7 +323,7 @@ export const App: Component<AppProps> = (props) => {
       <Show when={key()} keyed>
         {() => {
           const issue = p.issue;
-          const ic = iconFor(issue, resolvedFor(issue));
+          const ic = iconFor(issue, resolvedFor(issue), agentStatusOf(issue));
           const human = ic.state === "human";
           const idStr = issueNum(issue.id);
           const tasksStr = issue.tasks ? `${issue.tasks.done}/${issue.tasks.total}` : "";
@@ -429,7 +445,7 @@ export const App: Component<AppProps> = (props) => {
                 const detailRec = detail();
                 const loaded = detailRec && detailRec.id === sel.id;
                 const body = loaded ? detailRec.body : null;
-                const ic = iconFor(sel, resolvedFor(sel));
+                const ic = iconFor(sel, resolvedFor(sel), agentStatusOf(sel));
                 const headerBudget = Math.max(0, detailInnerW() - (2 + issueNum(sel.id).length + 2));
                 const outcome = dispatch(sel);
                 const dispatchable = outcome.kind === "implement" || outcome.kind === "wayfinder";
@@ -453,7 +469,10 @@ export const App: Component<AppProps> = (props) => {
                       </For>
                     </box>
                     <RoleText role="meta">
-                      {`blocked by: ${sel.blockedBy.length ? sel.blockedBy.join(", ") : "—"}    agent: ${sel.assignee ?? "unclaimed"}${sel.tasks ? `    tasks: ${sel.tasks.done}/${sel.tasks.total}` : ""}${sel.updatedAt != null ? `    ${humanizeAge(sel.updatedAt, Date.now())} ago` : ""}`}
+                      {(() => {
+                        const live = agentStatusOf(sel);
+                        return `blocked by: ${sel.blockedBy.length ? sel.blockedBy.join(", ") : "—"}    agent: ${sel.assignee ?? "unclaimed"}${live ? `    live: ${live}` : ""}${sel.tasks ? `    tasks: ${sel.tasks.done}/${sel.tasks.total}` : ""}${sel.updatedAt != null ? `    ${humanizeAge(sel.updatedAt, Date.now())} ago` : ""}`;
+                      })()}
                     </RoleText>
                     <box flexDirection="row" paddingTop={1}>
                       <RoleText role="meta">dispatch: </RoleText>
