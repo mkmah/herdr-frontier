@@ -85,13 +85,17 @@ class FakeProvider implements TrackerProvider {
   }
 }
 
-/** Recorded fixture runner: serves canned stdout, records every invocation. */
+/** Recorded fixture runner: serves canned stdout, records every invocation.
+ *  A fixture value beginning with `__FAIL__:` returns exit 1 with the rest as
+ *  stderr (so a test can simulate a failing herdr command). */
 function recordingRunner(fixtures: Record<string, string>): { runner: HerdrRunner; calls: string[][] } {
   const calls: string[][] = [];
   const runner: HerdrRunner = async (args) => {
     calls.push(args);
-    const stdout = fixtures[args.join(" ")];
-    if (stdout === undefined) return { code: 1, stdout: "", stderr: `no fixture for: ${args.join(" ")}` };
+    const key = args.join(" ");
+    const stdout = fixtures[key];
+    if (stdout === undefined) return { code: 1, stdout: "", stderr: `no fixture for: ${key}` };
+    if (stdout.startsWith("__FAIL__:")) return { code: 1, stdout: "", stderr: stdout.slice("__FAIL__:".length) };
     return { code: 0, stdout, stderr: "" };
   };
   return { runner, calls };
@@ -182,6 +186,26 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(second).toEqual({ ok: false, issue: mk(), command: `/implement ${ID}`, reason: "already-dispatched" });
     // Only one agent-start invocation ever happened — no double-dispatch.
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(1);
+  });
+
+  it("closes the tab it created when the handoff fails (no orphan tab leak)", async () => {
+    // startAgent fails (e.g. `agent_pane_busy`) AFTER tab create succeeded. The
+    // dispatch rethrows, but first closes the just-created tab so a failed
+    // dispatch doesn't leak a bare-shell tab, and frees the in-session mutex.
+    // (The tracker claim stays until `releaseIssue`/manual reset — no un-claim.)
+    const h = harness(
+      [mk()],
+      {
+        fixtures: {
+          "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5":
+            "__FAIL__: agent_pane_busy: not an available shell",
+          "tab close wZ:t2": ok({}),
+        },
+      },
+    );
+    await expect(h.coordinator.dispatchIssue(mk())).rejects.toThrow(/agent_pane_busy/);
+    expect(h.calls.map((c) => c.join(" "))).toContain("tab close wZ:t2");
+    expect(h.claims.tryClaim(ID)).toBe(true); // mutex freed → retryable
   });
 
   it("reports already-claimed when the issue isn't open (in-flight or done — status gate)", async () => {

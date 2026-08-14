@@ -220,9 +220,19 @@ export class DispatchCoordinator {
         this.deps.claims.release(issue.id);
         return { ok: false, issue, command, reason: "claim-busy" };
       }
-      // The handoff failed (herdr error, etc.) — release the in-session mutex so
-      // a retry is possible. The claim itself stays on the tracker until
-      // `releaseIssue` (or a manual reset) reopens it.
+      // The handoff failed AFTER the tab was created (agent start / prompt
+      // error, e.g. `agent_pane_busy`). Close the orphan tab we just created so
+      // a failed dispatch doesn't leak a bare-shell tab — best-effort, since the
+      // claim itself can't be undone (it stays until `releaseIssue`/manual
+      // reset). Then free the in-session mutex so a retry is possible.
+      const orphanTabId = this.deps.claims.tabIdOf(issue.id);
+      if (orphanTabId) {
+        try {
+          await this.deps.client.closeTab(orphanTabId);
+        } catch {
+          // swallow — the claim/mutex cleanup below still runs
+        }
+      }
       this.deps.claims.release(issue.id);
       throw e;
     }
