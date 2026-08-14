@@ -32,7 +32,7 @@ import {
 } from "./logic.js";
 import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./display.js";
 import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
-import { buildForest, flattenForest, type TreeRow } from "./tree.js";
+import { buildForest, flattenForest } from "./tree.js";
 import { dispatch } from "./orchestrator.js";
 import type { DispatchCoordinator } from "./dispatch.js";
 import { copySelection } from "./selection.js";
@@ -212,11 +212,13 @@ export const App: Component<AppProps> = (props) => {
 
   const rows = createMemo(() => buildRows({ issues: issues(), loaded: loaded(), error: error() }));
   const listSelected = () => issues()[cursor()];
-  // The tree view's pool: the issues of the list-selected issue's run-root
-  // (its effort directory). Rooted on the list cursor, so toggling in and out
-  // of the tree never chases the tree cursor around.
-  const treeRoot = createMemo(() => effortOf(listSelected()?.id ?? ""));
-  const treePool = createMemo(() => issues().filter((i) => effortOf(i.id) === treeRoot()));
+  // The tree view's pool: the issues of the list-selected issue's effort
+  // directory (the run-root's graph lives in `.scratch/<effort>/issues/`;
+  // logic.ts reserves "run-root" for the root *issue*, so this is the effort
+  // dir, not the root). Rooted on the list cursor, so toggling in and out of
+  // the tree never chases the tree cursor around.
+  const treeEffort = createMemo(() => effortOf(listSelected()?.id ?? ""));
+  const treePool = createMemo(() => issues().filter((i) => effortOf(i.id) === treeEffort()));
   const treeRows = createMemo(() => flattenForest(buildForest(treePool())));
   const treeSelected = () => treeRows()[treeCursor()]?.issue;
   // The currently selected issue — view-aware, shared by the detail pane, the
@@ -259,11 +261,14 @@ export const App: Component<AppProps> = (props) => {
     const n = treeRows().length;
     setTreeCursor((c) => Math.min(c, Math.max(0, n - 1)));
   });
+  // Auto-scroll the tree cursor into view (issue 15). Reads the row *and* its
+  // depth so a poll that keeps the selected id but shifts its row re-scrolls.
   createEffect(() => {
-    const id = treeSelected()?.id;
-    if (id && treeScroll) {
+    const row = treeRows()[treeCursor()];
+    const depth = row?.depth;
+    if (row && treeScroll) {
       try {
-        treeScroll.scrollChildIntoView(id);
+        treeScroll.scrollChildIntoView(row.issue.id);
       } catch {
         // best-effort — a scrollbox quirk must not break cursor movement
       }
@@ -506,16 +511,30 @@ export const App: Component<AppProps> = (props) => {
   const openCount = () => shown().filter((i) => i.status === "open").length;
   const yourTurn = () => shown().filter((i) => isHumanTurn(i, agentStatusOf(i))).length;
 
-  // --- list row -----------------------------------------------------------
-  // Selection is a full-row background; a keyed <Show> remounts the row when
-  // selection/pulse/width change so the backgroundColor applies (function
-  // accessors aren't applied reactively for this prop in OpenTUI 0.5.1).
-  const IssueRow: Component<{ issue: Issue; selected: boolean; innerW: number; onMouseDown: (e: MouseEvent) => void }> = (p) => {
-    const key = () => `${p.selected ? 1 : 0}|${pulse() ? 1 : 0}|${p.innerW}`;
+  // --- issue row ------------------------------------------------------------
+  // The lean row both views paint — the list pane's `#id · title · tasks ·
+  // age` row, and (issue 15) the tree pane's version of the same row with a
+  // tree connector and depth. Selection is a full-row background; a keyed
+  // <Show> remounts the row when selection/pulse/width change so the
+  // backgroundColor applies (function accessors aren't applied reactively for
+  // this prop in OpenTUI 0.5.1). `depth`/`branch`/`rowId` are the tree's
+  // additions: depth via paddingLeft, a branch connector, and `id` on the box
+  // so the tree scrollbox's scrollChildIntoView can find the row.
+  const IssueRow: Component<{
+    issue: Issue;
+    selected: boolean;
+    innerW: number;
+    onMouseDown: (e: MouseEvent) => void;
+    depth?: number;
+    branch?: string;
+    rowId?: string;
+  }> = (p) => {
+    const key = () => `${p.selected ? 1 : 0}|${pulse() ? 1 : 0}|${p.innerW}|${p.depth ?? 0}`;
     return (
       <Show when={key()} keyed>
         {() => {
           const issue = p.issue;
+          const depth = p.depth ?? 0;
           const ic = iconFor(issue, resolvedFor(issue), agentStatusOf(issue));
           const human = ic.state === "human";
           const idStr = issueNum(issue.id);
@@ -524,15 +543,19 @@ export const App: Component<AppProps> = (props) => {
           const ageStr = issue.updatedAt != null ? humanizeAge(issue.updatedAt, Date.now()) : "";
           const fixed =
             2 + idStr.length + 2 + (tasksStr ? tasksStr.length + 1 : 0) + (ageStr ? ageStr.length + 1 : 0);
-          const budget = Math.max(0, p.innerW - fixed);
+          const budget = Math.max(0, p.innerW - fixed - depth * 2);
           return (
             <box
+              id={p.rowId}
               flexDirection="row"
-              paddingLeft={1}
+              paddingLeft={depth * 2 + 1}
               paddingRight={1}
               backgroundColor={p.selected ? THEME.selBg : undefined}
               onMouseDown={p.onMouseDown}
             >
+              {p.branch ? (
+                <text fg={THEME.border.idle} attributes={TextAttributes.BOLD} flexShrink={0}>{p.branch}</text>
+              ) : null}
               <text
                 fg={iconColor(ic.state, pulse())}
                 flexShrink={0}
@@ -654,56 +677,38 @@ export const App: Component<AppProps> = (props) => {
     );
   };
 
-  // --- tree row ------------------------------------------------------------
-  // The lean row the tree view paints (issue 15): tree connector · icon ·
-  // #id · title · tasks · age, depth via paddingLeft, full-row selection bg.
-  // `id` on the box lets the scrollbox's scrollChildIntoView find the row.
-  const TreeRowC: Component<{ row: TreeRow; selected: boolean; innerW: number; onMouseDown: (e: MouseEvent) => void }> = (p) => {
-    const key = () => `${p.selected ? 1 : 0}|${pulse() ? 1 : 0}|${p.innerW}`;
-    return (
-      <Show when={key()} keyed>
-        {() => {
-          const issue = p.row.issue;
-          const ic = iconFor(issue, resolvedFor(issue), agentStatusOf(issue));
-          const human = ic.state === "human";
-          const idStr = issueNum(issue.id);
-          const tasksStr = issue.tasks ? `${issue.tasks.done}/${issue.tasks.total}` : "";
-          const tasksDone = !!issue.tasks && issue.tasks.done >= issue.tasks.total;
-          const ageStr = issue.updatedAt != null ? humanizeAge(issue.updatedAt, Date.now()) : "";
-          const fixed =
-            2 + idStr.length + 2 + (tasksStr ? tasksStr.length + 1 : 0) + (ageStr ? ageStr.length + 1 : 0);
-          const budget = Math.max(0, p.innerW - fixed - p.row.depth * 2);
-          return (
-            <box
-              id={issue.id}
-              flexDirection="row"
-              paddingLeft={p.row.depth * 2 + 1}
-              paddingRight={1}
-              backgroundColor={p.selected ? THEME.selBg : undefined}
-              onMouseDown={p.onMouseDown}
-            >
-              <text fg={THEME.border.idle} attributes={TextAttributes.BOLD} flexShrink={0}>{p.row.branch}</text>
-              <text
-                fg={iconColor(ic.state, pulse())}
-                flexShrink={0}
-                attributes={human && pulse() ? TextAttributes.BOLD : 0}
-              >
-                {`${ic.glyph} `}
-              </text>
-              <text fg={THEME.accent.id} flexShrink={0}>{idStr}</text>
-              <text fg={p.selected ? THEME.text.title : THEME.text.body} flexGrow={1} flexShrink={1}>
-                {`  ${trunc(issue.title, budget)}`}
-              </text>
-              <text fg={tasksDone ? THEME.state.done : THEME.state.blocked} flexShrink={0}>
-                {tasksStr ? ` ${tasksStr}` : ""}
-              </text>
-              <text fg={THEME.text.dim} flexShrink={0}>{ageStr ? ` ${ageStr}` : ""}</text>
-            </box>
-          );
-        }}
-      </Show>
-    );
-  };
+  // --- detail pane container -----------------------------------------------
+  // The bordered, titled scrollbox the DetailContent lives in — shared by the
+  // list view's right-hand pane and the tree view's bottom pane (issue 15).
+  // `width`/`height` distinguish the two layouts (60% column vs 38% below).
+  const DetailPane: Component<{
+    innerW: number;
+    title: string;
+    width?: `${number}%`;
+    height?: `${number}%`;
+    flexGrow?: number;
+    flexShrink?: number;
+  }> = (p) => (
+    <box
+      flexDirection="column"
+      width={p.width}
+      height={p.height}
+      flexGrow={p.flexGrow}
+      flexShrink={p.flexShrink}
+      border={true}
+      borderStyle="rounded"
+      borderColor={focus() === "detail" ? THEME.border.focused : THEME.border.idle}
+      title={p.title}
+      titleColor={focus() === "detail" ? THEME.border.focused : THEME.text.dim}
+      onMouseDown={onDetailMouseDown}
+    >
+      <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
+        <Show when={detailKey()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
+          {() => <DetailContent innerW={p.innerW} />}
+        </Show>
+      </scrollbox>
+    </box>
+  );
 
   // --- primary shell: list (40%) + detail (60%) -----------------------------
   const ListShell: Component = () => (
@@ -750,24 +755,13 @@ export const App: Component<AppProps> = (props) => {
       </box>
 
       {/* detail pane — definite 60% */}
-      <box
-        flexDirection="column"
-        width="60%"
-        flexShrink={0}
-        flexGrow={1}
-        border={true}
-        borderStyle="rounded"
-        borderColor={focus() === "detail" ? THEME.border.focused : THEME.border.idle}
+      <DetailPane
+        innerW={detailInnerW()}
         title={selected() ? ` ${issueNum(selected()!.id)} ` : " Detail "}
-        titleColor={focus() === "detail" ? THEME.border.focused : THEME.text.dim}
-        onMouseDown={onDetailMouseDown}
-      >
-        <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
-          <Show when={detailKey()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
-            {() => <DetailContent innerW={detailInnerW()} />}
-          </Show>
-        </scrollbox>
-      </box>
+        width="60%"
+        flexGrow={1}
+        flexShrink={0}
+      />
     </box>
   );
 
@@ -792,10 +786,13 @@ export const App: Component<AppProps> = (props) => {
         <scrollbox ref={(el) => (treeScroll = el)} flexGrow={1} scrollY={true} onMouseScroll={onTreeWheel}>
           <For each={treeRows()}>
             {(row) => (
-              <TreeRowC
-                row={row}
+              <IssueRow
+                issue={row.issue}
                 selected={selected()?.id === row.issue.id}
                 innerW={treeInnerW()}
+                depth={row.depth}
+                branch={row.branch}
+                rowId={row.issue.id}
                 onMouseDown={(e: MouseEvent) => onTreeRowMouseDown(e, row.issue.id)}
               />
             )}
@@ -804,22 +801,11 @@ export const App: Component<AppProps> = (props) => {
       </box>
 
       {/* detail pane — the verbose selected-node record, below (~38%) */}
-      <box
-        flexDirection="column"
-        height="38%"
-        border={true}
-        borderStyle="rounded"
-        borderColor={focus() === "detail" ? THEME.border.focused : THEME.border.idle}
+      <DetailPane
+        innerW={treeDetailInnerW()}
         title={selected() ? ` Detail · ${issueNum(selected()!.id)} ` : " Detail "}
-        titleColor={focus() === "detail" ? THEME.border.focused : THEME.text.dim}
-        onMouseDown={onDetailMouseDown}
-      >
-        <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
-          <Show when={detailKey()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
-            {() => <DetailContent innerW={treeDetailInnerW()} />}
-          </Show>
-        </scrollbox>
-      </box>
+        height="38%"
+      />
     </box>
   );
 
@@ -833,7 +819,7 @@ export const App: Component<AppProps> = (props) => {
         {view() === "tree" ? (
           <>
             <RoleText role="meta">  dependency tree  </RoleText>
-            <RoleText role="h2">{treeRoot()}</RoleText>
+            <RoleText role="h2">{treeEffort()}</RoleText>
             <RoleText role="meta">  </RoleText>
           </>
         ) : (

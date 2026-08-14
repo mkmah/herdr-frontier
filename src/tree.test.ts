@@ -40,7 +40,7 @@ describe("buildForest — the forward forest", () => {
     expect(forest.map((r) => r.issue.id)).toEqual([i1.id, i2.id]);
   });
 
-  it("treats a cross-pool blocker as out-of-run: it does not root the node", () => {
+  it("treats a cross-pool blocker as out-of-run: the node stays a root", () => {
     // "04" waits on "99" which is not in the pool — so "04" is a root here.
     const i4 = mk({ id: ".scratch/e/issues/04-d.md", title: "04 — D", blockedBy: ["99"] });
     const forest = buildForest([i4]);
@@ -53,7 +53,9 @@ describe("buildForest — the forward forest", () => {
     const i3 = mk({ id: ".scratch/e/issues/03-c.md", title: "03 — C", blockedBy: ["02"] });
     const forest = buildForest([i1, i2, i3]);
     const rows = flattenForest(forest);
-    // Every issue appears exactly once; the 02↔03 cycle is cut at the back-edge.
+    // The 02↔03 cycle is cut at the back-edge (02 is already an ancestor when
+    // 03's expansion reaches it), so the flatten terminates and shows each
+    // node once in this acyclic input.
     expect(rows.map((r) => r.issue.id)).toEqual([i1.id, i2.id, i3.id]);
     expect(rows[1]!.issue.id).toBe(i2.id);
     expect(rows[2]!.issue.id).toBe(i3.id);

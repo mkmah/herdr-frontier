@@ -29,8 +29,10 @@ export function buildForest(pool: Issue[]): TreeNode[] {
   const byNumber = (a: Issue, b: Issue) => issueNumber(a.id) - issueNumber(b.id) || a.id.localeCompare(b.id);
   const byId = new Map(pool.map((i) => [i.id, i]));
   // A blocker ref may be a full id or the issue's numeric prefix ("05"); both
-  // resolve within the pool (single effort), mirroring blockerResolved's
-  // prefix matching in ./logic.ts. First-by-number wins on a prefix collision.
+  // resolve within the pool (a single effort, so numbers are unique there) —
+  // the same prefix style `blockerResolved` matches, though here it resolves
+  // membership (in-run), not resolution status. First-by-number wins on a
+  // prefix collision.
   const byNum = new Map<string, Issue>();
   for (const i of [...pool].sort(byNumber)) {
     if (!byNum.has(issueNum(i.id))) byNum.set(issueNum(i.id), i);
