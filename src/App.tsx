@@ -232,24 +232,30 @@ export const App: Component<AppProps> = (props) => {
   }
 
   // --- automated run (issue 14) --------------------------------------------
-  // `s` toggles a run bound to the selected Issue's run-root (its effort — the
-  // directory a map/spec/to-tickets set lives in): starts one when none is
-  // running, stops the running one otherwise. The controller walks the graph,
-  // dispatching each issue as its blockers clear; the poll loop steps it.
-  async function toggleRun() {
+  // `s` starts a run bound to the selected Issue's run-root (its effort — the
+  // directory a map/spec/to-tickets set lives in); `S` (shift-s) stops every
+  // running run. Starting is idempotent — a running run is returned untouched,
+  // so `s` never toggles a run off. The controller walks the graph, dispatching
+  // each issue as its blockers clear; the poll loop steps it. Stopping is a
+  // deliberate, separate key: the poll steps ALL stored runs, so stop-all is
+  // the reliable end to the auto-dispatch.
+  async function startRun() {
     const sel = selected();
     if (!sel || !props.runController) return;
     try {
-      const root = effortOf(sel.id);
-      const existing = props.runController.load(root);
-      if (existing?.status === "running") {
-        await props.runController.stop(root);
-      } else {
-        await props.runController.start(root);
-      }
+      await props.runController.start(effortOf(sel.id));
       setRunVersion((v) => v + 1);
     } catch {
-      // surfaced next poll — start/stop failures are non-fatal
+      // surfaced next poll — start failures are non-fatal
+    }
+  }
+  async function stopRun() {
+    if (!props.runController) return;
+    try {
+      await props.runController.stopAll();
+      setRunVersion((v) => v + 1);
+    } catch {
+      // surfaced next poll — stop failures are non-fatal
     }
   }
 
@@ -289,7 +295,8 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "k" || key.name === "up") move(-1);
     else if (key.name === "return") void doDispatch();
     else if (key.name === "x") void doRelease();
-    else if (key.name === "s") void toggleRun();
+    else if (key.name === "s" && !key.shift) void startRun();
+    else if (key.name === "S" || (key.name === "s" && key.shift)) void stopRun();
     else if (key.name === "r") void load();
   });
 
@@ -591,7 +598,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run/stop · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run · S stop all · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}

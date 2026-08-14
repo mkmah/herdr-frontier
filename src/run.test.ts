@@ -444,6 +444,57 @@ describe("RunController", () => {
     await h.controller.stepAll();
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(2);
   });
+
+  it("a stopped run stops re-spawning issues reopened by hand (manual tab close then md edit)", async () => {
+    const h = harness([mk({ id: A }), mk({ id: B })]);
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll(); // dispatch A + B → tabs spawn
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(2);
+
+    // Manual tab close: the pane is gone but the tracker still says claimed. The
+    // poll confirms the claims (tracker shows claimed), then the user edits the
+    // md back to open → reconcileClaims releases the confirmed claim, so the
+    // running run re-dispatches it.
+    h.coordinator.reconcileClaims(await h.provider.listIssues()); // confirm A + B
+    h.provider.setStatus(A, "open");
+    h.coordinator.reconcileClaims(await h.provider.listIssues()); // release A
+    await h.controller.stepAll(await h.provider.listIssues());
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
+
+    // Stopping the run must end the re-spawn for good, even when md edits follow.
+    await h.controller.stop(EFFORT);
+    h.provider.setStatus(B, "open");
+    h.coordinator.reconcileClaims(await h.provider.listIssues());
+    await h.controller.stepAll(await h.provider.listIssues());
+    await h.controller.stepAll(await h.provider.listIssues());
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
+  });
+
+  it("stopAll stops every running run (the dedicated S key — a stopped run idles)", async () => {
+    const other = ".scratch/other"; // a second effort's run-root
+    const h = harness([mk({ id: A }), mk({ id: B })]);
+    const h2 = harness([mk({ id: `${other}/issues/01-x.md` })], {
+      provider: h.provider,
+      storeDir: join(stateDir, "runs"),
+    });
+    // Two running runs (each bound to its own effort) over one shared store.
+    await h.controller.start(EFFORT);
+    await h2.controller.start(other);
+    expect(h.controller.load(EFFORT)?.status).toBe("running");
+    expect(h2.controller.load(other)?.status).toBe("running");
+
+    // The dedicated stop key stops every running run, not just the selected
+    // effort's — so auto-dispatch ends even when the selection is elsewhere.
+    await h.controller.stopAll();
+    expect(h.controller.load(EFFORT)?.status).toBe("stopped");
+    expect(h2.controller.load(other)?.status).toBe("stopped");
+
+    // Both idle now — md edits can't re-spawn either run.
+    await h.controller.stepAll();
+    await h2.controller.stepAll();
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(0);
+    expect(h2.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(0);
+  });
 });
 
 // --- persistence seam (FileRunStore over the plugin state dir) --------------

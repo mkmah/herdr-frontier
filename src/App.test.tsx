@@ -273,8 +273,9 @@ describe("App (initial render smoke — two-pane shell)", () => {
   });
 
   // Issue 14: the detail pane shows the run-controller's status for the
-  // selected issue's run-root, and the footer advertises the s start-run key.
-  it("shows the run status line for the selected issue's run-root and the s key", async () => {
+  // selected issue's run-root, and the footer advertises the s start-run key
+  // and the dedicated S stop-all key.
+  it("shows the run status line for the selected issue's run-root and the s/S keys", async () => {
     const issue = mk({ id: ".scratch/e/issues/01-x.md" });
     const detail: IssueDetail = { ...issue, body: "", comments: [] };
     const runController = {
@@ -307,6 +308,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("1 in-flight");
     expect(frame).toContain("1 pending");
     expect(frame).toContain("s run");
+    expect(frame).toContain("S stop all");
     setup.renderer.destroy();
   });
 });

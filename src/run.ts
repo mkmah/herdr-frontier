@@ -325,6 +325,20 @@ export class RunController {
     return stopped;
   }
 
+  /** Stop every running run (the dedicated stop key). Returns how many were
+   *  stopped. Stopping is per-run root; the poll steps all stored runs, so a
+   *  stop-all is the reliable "end the auto-dispatch" control. */
+  async stopAll(): Promise<number> {
+    let stopped = 0;
+    for (const run of this.deps.store.all()) {
+      if (run.status === "running") {
+        await this.stop(run.root);
+        stopped += 1;
+      }
+    }
+    return stopped;
+  }
+
   /**
    * Step every running run one tick. Accepts the poll loop's fresh snapshot so
    * the run's work rides on the issues the UI already loaded. A failing run
