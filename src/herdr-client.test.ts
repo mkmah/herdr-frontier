@@ -258,14 +258,42 @@ describe("HerdrClient.prompt — the prompt-API shim (issue 12)", () => {
     });
     const { runner, calls } = fixtureRunner({
       "api schema --json": argvSchema,
-      "agent start #12 --pane wZ:p3 -- opencode -m claude-sonnet-4-5": JSON.stringify({ id: "x", result: {} }),
+      "agent start #12 --pane wZ:p3 --timeout 120000 -- opencode -m claude-sonnet-4-5": JSON.stringify({ id: "x", result: {} }),
     });
     const client = new HerdrClient({ runner });
     await client.startAgent(START_OPTS);
     expect(calls.map((c) => c.join(" "))).toEqual([
       "api schema --json",
-      "agent start #12 --pane wZ:p3 -- opencode -m claude-sonnet-4-5",
+      "agent start #12 --pane wZ:p3 --timeout 120000 -- opencode -m claude-sonnet-4-5",
     ]);
+  });
+
+  // agent start must wait for the freshly-created pane's shell to reach its
+  // prompt — a heavy shell init (docker/nvm/pyenv) can exceed herdr's 30s
+  // default and fail with "agent target pane … is not an available shell". The
+  // reference wayfinder driver hard-codes 120s (herdr.rs agent_start_kind); we
+  // default to the same at the driver boundary.
+  it("startAgent defaults to a 120s readiness timeout (matches the reference driver)", async () => {
+    const { runner, calls } = fixtureRunner({
+      "api schema --json": SCHEMA_WITH_SEND,
+      "agent start #12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": JSON.stringify({ id: "x", result: {} }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.startAgent(START_OPTS); // no timeoutMs set
+    const startVec = calls.find((c) => c[0] === "agent" && c[1] === "start")!.join(" ");
+    expect(startVec).toBe("agent start #12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5");
+  });
+
+  it("an explicit timeoutMs overrides the 120s default", async () => {
+    const { runner, calls } = fixtureRunner({
+      "api schema --json": SCHEMA_WITH_SEND,
+      "agent start #12 --kind opencode --pane wZ:p3 --timeout 5000 -- -m claude-sonnet-4-5": JSON.stringify({ id: "x", result: {} }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.startAgent({ ...START_OPTS, timeoutMs: 5000 });
+    const startVec = calls.find((c) => c[0] === "agent" && c[1] === "start")!.join(" ");
+    expect(startVec).toContain("--timeout 5000");
+    expect(startVec).not.toContain("--timeout 120000");
   });
 
   it("the send-path shim surfaces a failed `agent send` instead of silently succeeding", async () => {

@@ -210,10 +210,19 @@ export class HerdrClient {
     await this.run(["tab", "close", tabId]);
   }
 
-  /** Start the agent in a pane: `agent start`, shaped to the server's schema. */
+  /**
+   * Start the agent in a pane: `agent start`, shaped to the server's schema.
+   * Defaults `timeoutMs` to 120s: `agent start` requires the pane to be at its
+   * interactive shell prompt, and a freshly-created tab's shell (with a heavy
+   * docker/nvm/pyenv init) can exceed herdr's own 30s default — failing with
+   * `agent_pane_busy` / "not an available shell". The reference wayfinder driver
+   * hard-codes 120s (`herdr.rs agent_start_kind`); an explicit `o.timeoutMs`
+   * overrides it.
+   */
   async startAgent(o: StartOptions): Promise<void> {
     const api = await this.detectStartApi();
-    await this.run(agentStartVector(o, api));
+    const opts: StartOptions = { ...o, timeoutMs: o.timeoutMs ?? 120_000 };
+    await this.run(agentStartVector(opts, api));
   }
 
   /**

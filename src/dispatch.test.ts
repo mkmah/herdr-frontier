@@ -118,7 +118,7 @@ function harness(
   const { runner, calls } = recordingRunner({
     "api schema --json": SCHEMA,
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
-    "agent start herdr-beads-12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5": ok({}),
+    "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": ok({}),
     [`agent prompt herdr-beads-12 /implement ${ID}`]: ok({}),
     ...over.fixtures,
   });
@@ -168,7 +168,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.calls.map((c) => c.join(" "))).toEqual([
       "tab create --cwd /repo --label 12 — Driver --no-focus",
       "api schema --json",
-      "agent start herdr-beads-12 --kind opencode --pane wZ:p3 -- -m claude-sonnet-4-5",
+      "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5",
       `agent prompt herdr-beads-12 /implement ${ID}`,
     ]);
   });
