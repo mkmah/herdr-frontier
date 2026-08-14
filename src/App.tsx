@@ -232,17 +232,24 @@ export const App: Component<AppProps> = (props) => {
   }
 
   // --- automated run (issue 14) --------------------------------------------
-  // `s` starts a run bound to the selected Issue's run-root (its effort — the
-  // directory a map/spec/to-tickets set lives in). The controller walks that
-  // graph, dispatching each issue as its blockers clear; the poll loop steps it.
-  async function startRun() {
+  // `s` toggles a run bound to the selected Issue's run-root (its effort — the
+  // directory a map/spec/to-tickets set lives in): starts one when none is
+  // running, stops the running one otherwise. The controller walks the graph,
+  // dispatching each issue as its blockers clear; the poll loop steps it.
+  async function toggleRun() {
     const sel = selected();
     if (!sel || !props.runController) return;
     try {
-      await props.runController.start(effortOf(sel.id));
+      const root = effortOf(sel.id);
+      const existing = props.runController.load(root);
+      if (existing?.status === "running") {
+        await props.runController.stop(root);
+      } else {
+        await props.runController.start(root);
+      }
       setRunVersion((v) => v + 1);
     } catch {
-      // surfaced next poll — start failures are non-fatal
+      // surfaced next poll — start/stop failures are non-fatal
     }
   }
 
@@ -282,7 +289,7 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "k" || key.name === "up") move(-1);
     else if (key.name === "return") void doDispatch();
     else if (key.name === "x") void doRelease();
-    else if (key.name === "s") void startRun();
+    else if (key.name === "s") void toggleRun();
     else if (key.name === "r") void load();
   });
 
@@ -584,7 +591,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run/stop · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}

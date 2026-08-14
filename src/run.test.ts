@@ -431,6 +431,19 @@ describe("RunController", () => {
     await h.controller.stepAll();
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
   });
+
+  it("restart after stop replaces the stopped run with a fresh one (s toggle)", async () => {
+    const h = harness([mk({ id: A }), mk({ id: B })]);
+    await h.controller.start(EFFORT);
+    await h.controller.stop(EFFORT);
+    const fresh = await h.controller.start(EFFORT);
+    expect(fresh.status).toBe("running");
+    // A stopped run is replaced, not returned as-is: the snapshot is fresh (all
+    // pending) and stepAll dispatches again — a stopped run would idle.
+    expect(h.controller.load(EFFORT)?.issues.every((m) => m.status === "pending")).toBe(true);
+    await h.controller.stepAll();
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(2);
+  });
 });
 
 // --- persistence seam (FileRunStore over the plugin state dir) --------------
