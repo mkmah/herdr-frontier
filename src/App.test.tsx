@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App } from "./App.js";
+import { App, appKeyAction } from "./App.js";
 import {
   buildRows,
   issueNum,
@@ -54,6 +54,28 @@ describe("logic: effortOf / issueNum", () => {
     expect(effortOf(".scratch/auth-spec/issues/22-token.md")).toBe("auth-spec");
     expect(issueNum(".scratch/e/issues/09-skeleton.md")).toBe("#09");
     expect(issueNum(".scratch/e/issues/README.md")).toBe("#README");
+  });
+});
+
+describe("appKeyAction — the key bindings (issue 14 stop)", () => {
+  it("maps s to start and shift-s (both parse forms) to stop — never a toggle", () => {
+    expect(appKeyAction({ name: "s", shift: false })).toBe("run-start");
+    expect(appKeyAction({ name: "s", shift: true })).toBe("run-stop"); // raw terminal
+    expect(appKeyAction({ name: "S", shift: true })).toBe("run-stop"); // kitty protocol
+  });
+
+  it("keeps the other bindings stable", () => {
+    expect(appKeyAction({ name: "q" })).toBe("quit");
+    expect(appKeyAction({ name: "escape" })).toBe("quit");
+    expect(appKeyAction({ name: "tab" })).toBe("focus");
+    expect(appKeyAction({ name: "j" })).toBe("down");
+    expect(appKeyAction({ name: "down" })).toBe("down");
+    expect(appKeyAction({ name: "k" })).toBe("up");
+    expect(appKeyAction({ name: "up" })).toBe("up");
+    expect(appKeyAction({ name: "return" })).toBe("dispatch");
+    expect(appKeyAction({ name: "x" })).toBe("release");
+    expect(appKeyAction({ name: "r" })).toBe("reload");
+    expect(appKeyAction({ name: "z" })).toBeNull();
   });
 });
 
@@ -308,7 +330,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("1 in-flight");
     expect(frame).toContain("1 pending");
     expect(frame).toContain("s run");
-    expect(frame).toContain("S stop all");
+    expect(frame).toContain("S stop+release");
     setup.renderer.destroy();
   });
 });

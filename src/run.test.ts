@@ -495,6 +495,31 @@ describe("RunController", () => {
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(0);
     expect(h2.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(0);
   });
+
+  it("stopAllAndRelease stops every run AND releases its in-flight panes (S = the x-loop in one key)", async () => {
+    const h = harness([mk({ id: A }), mk({ id: B }), mk({ id: C })]);
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll(); // dispatch A + B + C (concurrency 3)
+    const run = h.controller.load(EFFORT)!;
+    expect(run.issues.filter((m) => m.status === "dispatched")).toHaveLength(3);
+    expect(h.provider.get(A).status).toBe("claimed");
+
+    const stopped = await h.controller.stopAllAndRelease();
+    expect(stopped).toBe(1);
+
+    // The run is stopped and every in-flight pane was released back to open
+    // (the provider claim dropped, its tab closed) — what x does per-issue.
+    expect(h.controller.load(EFFORT)?.status).toBe("stopped");
+    expect(h.provider.get(A).status).toBe("open");
+    expect(h.provider.get(B).status).toBe("open");
+    expect(h.provider.get(C).status).toBe("open");
+    expect(h.calls.filter((c) => c[0] === "tab" && c[1] === "close")).toHaveLength(3);
+
+    // Nothing left to spawn — edits can't resurrect the run.
+    h.provider.setStatus(A, "open");
+    await h.controller.stepAll();
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
+  });
 });
 
 // --- persistence seam (FileRunStore over the plugin state dir) --------------

@@ -79,6 +79,38 @@ const RoleText: Component<{ role: keyof typeof THEME["role"]; children: any; fle
   return <text fg={r.fg} attributes={r.attr} flexGrow={p.flexGrow}>{p.children}</text>;
 };
 
+// --- key handling (pure, unit-tested) ----------------------------------------
+
+/** The actions a key press can trigger — the single source of truth the
+ *  `useKeyboard` handler switches on, extracted so the bindings are testable
+ *  (issue 14 stop: `s` starts, shift-`s` stops — never a toggle). */
+export type AppKeyAction =
+  | "quit"
+  | "focus"
+  | "down"
+  | "up"
+  | "dispatch"
+  | "release"
+  | "run-start"
+  | "run-stop"
+  | "reload";
+
+/** Map a parsed key event to its action. shift-`s` reaches us as `name: "s"`
+ *  with `shift: true` (raw terminal) or `name: "S"` (kitty protocol); both map
+ *  to stop. Returns null for keys the shell ignores. */
+export function appKeyAction(key: { name?: string; shift?: boolean }): AppKeyAction | null {
+  if (key.name === "q" || key.name === "escape") return "quit";
+  if (key.name === "tab") return "focus";
+  if (key.name === "j" || key.name === "down") return "down";
+  if (key.name === "k" || key.name === "up") return "up";
+  if (key.name === "return") return "dispatch";
+  if (key.name === "x") return "release";
+  if (key.name === "s" && !key.shift) return "run-start";
+  if (key.name === "S" || (key.name === "s" && key.shift)) return "run-stop";
+  if (key.name === "r") return "reload";
+  return null;
+}
+
 export const App: Component<AppProps> = (props) => {
   const renderer = useRenderer();
   const dims = useTerminalDimensions();
@@ -234,11 +266,14 @@ export const App: Component<AppProps> = (props) => {
   // --- automated run (issue 14) --------------------------------------------
   // `s` starts a run bound to the selected Issue's run-root (its effort — the
   // directory a map/spec/to-tickets set lives in); `S` (shift-s) stops every
-  // running run. Starting is idempotent — a running run is returned untouched,
-  // so `s` never toggles a run off. The controller walks the graph, dispatching
-  // each issue as its blockers clear; the poll loop steps it. Stopping is a
-  // deliberate, separate key: the poll steps ALL stored runs, so stop-all is
-  // the reliable end to the auto-dispatch.
+  // running run AND releases each in-flight pane it dispatched (close tab +
+  // reopen the issue) — the one-key version of pressing x on every issue.
+  // Starting is idempotent — a running run is returned untouched, so `s` never
+  // toggles a run off. The controller walks the graph, dispatching each issue
+  // as its blockers clear; the poll loop steps it. Stopping is a deliberate,
+  // separate key: the poll steps ALL stored runs, so stop-all is the reliable
+  // end to the auto-dispatch, and releasing the in-flight work is what makes
+  // "stop" actually feel like it stopped.
   async function startRun() {
     const sel = selected();
     if (!sel || !props.runController) return;
@@ -252,7 +287,7 @@ export const App: Component<AppProps> = (props) => {
   async function stopRun() {
     if (!props.runController) return;
     try {
-      await props.runController.stopAll();
+      await props.runController.stopAllAndRelease();
       setRunVersion((v) => v + 1);
     } catch {
       // surfaced next poll — stop failures are non-fatal
@@ -289,15 +324,35 @@ export const App: Component<AppProps> = (props) => {
   }
 
   useKeyboard((key) => {
-    if (key.name === "q" || key.name === "escape") (props.onQuit ?? (() => renderer.destroy()))();
-    else if (key.name === "tab") setFocus((f) => cycleFocus(f));
-    else if (key.name === "j" || key.name === "down") move(1);
-    else if (key.name === "k" || key.name === "up") move(-1);
-    else if (key.name === "return") void doDispatch();
-    else if (key.name === "x") void doRelease();
-    else if (key.name === "s" && !key.shift) void startRun();
-    else if (key.name === "S" || (key.name === "s" && key.shift)) void stopRun();
-    else if (key.name === "r") void load();
+    switch (appKeyAction(key)) {
+      case "quit":
+        (props.onQuit ?? (() => renderer.destroy()))();
+        break;
+      case "focus":
+        setFocus((f) => cycleFocus(f));
+        break;
+      case "down":
+        move(1);
+        break;
+      case "up":
+        move(-1);
+        break;
+      case "dispatch":
+        void doDispatch();
+        break;
+      case "release":
+        void doRelease();
+        break;
+      case "run-start":
+        void startRun();
+        break;
+      case "run-stop":
+        void stopRun();
+        break;
+      case "reload":
+        void load();
+        break;
+    }
   });
 
   // Load the selected Issue's full body whenever the selection changes. Each
@@ -598,7 +653,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run · S stop all · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · s run · S stop+release · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}

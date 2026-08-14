@@ -339,6 +339,30 @@ export class RunController {
     return stopped;
   }
 
+  /** Stop every running run AND release each run's in-flight panes back to open
+   *  (close tab + drop claim + reopen the issue) — the one-key version of
+   *  pressing x on every dispatched issue. Halting new dispatch alone leaves the
+   *  already-spawned agents running and reacting to edits, which reads as "stop
+   *  did nothing". Release is best-effort per pane — a stuck pane is an orphan
+   *  the user can close, but it never blocks the other releases or the stop. */
+  async stopAllAndRelease(): Promise<number> {
+    const runs = this.deps.store.all().filter((r) => r.status === "running");
+    for (const run of runs) {
+      await this.stop(run.root);
+      for (const member of run.issues) {
+        if (member.status !== "dispatched") continue;
+        const issue = await this.deps.provider.readIssue(member.id).catch(() => null);
+        if (!issue) continue;
+        try {
+          await this.deps.coordinator.releaseIssue(issue);
+        } catch {
+          // best-effort — the run is stopped regardless
+        }
+      }
+    }
+    return runs.length;
+  }
+
   /**
    * Step every running run one tick. Accepts the poll loop's fresh snapshot so
    * the run's work rides on the issues the UI already loaded. A failing run
