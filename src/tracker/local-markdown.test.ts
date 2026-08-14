@@ -7,7 +7,7 @@
 // missing-`Labels:` ⇒ needs-triage rule, filtering, and error behavior.
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { rm, mkdir, writeFile, mkdtemp, readdir, readFile } from "node:fs/promises";
+import { rm, mkdir, writeFile, mkdtemp, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -357,5 +357,79 @@ describe("LocalMarkdownProvider.claim (issue 12 — atomic mutex)", () => {
     expect(loses).toHaveLength(1);
     const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
     expect(onDisk).toContain("Status: claimed");
+  });
+});
+
+describe("LocalMarkdownProvider.release (issue 12 — reopen an in-flight issue)", () => {
+  const BODY = "## What to build\n\nThe driver with an injectable runner.\n\n- [ ] claim first\n- [ ] dispatch after";
+  async function seed(status: "open" | "claimed" | "resolved" = "claimed"): Promise<string> {
+    await writeIssue(
+      "herdr-beads",
+      "12-driver.md",
+      ["# 12 — Driver", "", `Status: ${status}`, "Type: task", "Labels: ready-for-agent", "Blocked by: 10, 11", "Assignee: —", "", BODY].join("\n"),
+    );
+    return ".scratch/herdr-beads/issues/12-driver.md";
+  }
+
+  it("releases a claimed issue back to open (the inverse of claim)", async () => {
+    const id = await seed("claimed");
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const released = await p.release(id);
+    expect(released.status).toBe("open");
+    const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
+    expect(onDisk).toContain("Status: open");
+    expect(onDisk).not.toContain("Status: claimed");
+  });
+
+  it("can also reopen a resolved issue (any non-open status → open)", async () => {
+    const id = await seed("resolved");
+    const released = await new LocalMarkdownProvider({ repoRoot: root }).release(id);
+    expect(released.status).toBe("open");
+    expect(await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8")).toContain("Status: open");
+  });
+
+  it("is idempotent — releasing an already-open issue is a no-op (no rewrite)", async () => {
+    const id = await seed("open");
+    const path = issuePath("herdr-beads", "12-driver.md");
+    const before = await stat(path);
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const released = await p.release(id);
+    expect(released.status).toBe("open");
+    const after = await stat(path);
+    // No rewrite ⇒ mtime unchanged (sub-second fs mtime resolution on macOS).
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("preserves the body and the rest of the file exactly", async () => {
+    const id = await seed("claimed");
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.release(id);
+    const detail = await p.readIssue(id);
+    expect(detail.body).toBe(BODY);
+    expect(detail.blockedBy).toEqual(["10", "11"]);
+    expect(detail.tasks).toEqual({ done: 0, total: 2 });
+  });
+
+  it("throws IssueNotFound for a missing id", async () => {
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await expect(p.release(".scratch/none/issues/ghost.md")).rejects.toBeInstanceOf(IssueNotFound);
+  });
+
+  it("writes atomically — no temp-file corpse is left behind", async () => {
+    const id = await seed("claimed");
+    await new LocalMarkdownProvider({ repoRoot: root }).release(id);
+    const dir = issuePath("herdr-beads", "12-driver.md").replace(/12-driver\.md$/, "");
+    expect(await readdir(dir)).toEqual(["12-driver.md"]);
+  });
+
+  it("serializes a concurrent release vs claim — the winner is observed on disk", async () => {
+    // Under the same O_EXCL lock as claim, release and claim can't tear each
+    // other: one critical section runs, then the other reads the result.
+    const id = await seed("claimed");
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await Promise.allSettled([p.release(id), p.claim(id)]);
+    const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
+    // Final state is one of the two outcomes — never a torn/half-written file.
+    expect(["Status: open", "Status: claimed"].some((s) => onDisk.includes(s))).toBe(true);
   });
 });

@@ -64,6 +64,13 @@ class FakeProvider implements TrackerProvider {
     this.issues.set(id, claimed);
     return claimed;
   }
+  async release(id: string): Promise<Issue> {
+    const i = this.issues.get(id);
+    if (!i) throw new IssueNotFound(id);
+    const released: IssueDetail = { ...i, status: "open" };
+    this.issues.set(id, released);
+    return released;
+  }
   async updateLabels(id: string): Promise<Issue> {
     return this.readIssue(id);
   }
@@ -303,5 +310,77 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     await h.coordinator.reconcileDeadDispatches();
     expect(h.claims.has(ID)).toBe(true); // within grace — not yet eligible
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "list")).toBe(false); // didn't even query
+  });
+});
+
+describe("ClaimRegistry (tab tracking)", () => {
+  it("records and returns the tab a dispatch landed in", () => {
+    const reg = new ClaimRegistry();
+    reg.tryClaim(ID);
+    expect(reg.tabIdOf(ID)).toBeUndefined();
+    reg.setTabId(ID, "wZ:t2");
+    expect(reg.tabIdOf(ID)).toBe("wZ:t2");
+    reg.release(ID);
+    expect(reg.tabIdOf(ID)).toBeUndefined();
+  });
+});
+
+describe("DispatchCoordinator.releaseIssue (stop + reopen)", () => {
+  it("releases the claim, closes the dispatched tab, and frees the in-session mutex", async () => {
+    const h = harness([mk()], { fixtures: { "tab close wZ:t2": ok({}) } });
+    await h.coordinator.dispatchIssue(mk()); // claims + creates tab wZ:t2
+    expect(h.claims.has(ID)).toBe(true);
+    expect(h.claims.tabIdOf(ID)).toBe("wZ:t2");
+
+    const result = await h.coordinator.releaseIssue(mk());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tabClosed).toBe(true);
+    expect((await h.provider.readIssue(ID)).status).toBe("open");
+    expect(h.claims.tryClaim(ID)).toBe(true); // mutex freed → re-dispatchable
+    expect(h.calls.map((c) => c.join(" "))).toContain("tab close wZ:t2");
+  });
+
+  it("reopens a foreign/stale claim even with no tracked tab (no tab close)", async () => {
+    // An issue claimed by another process (or a crashed prior dispatch) is not
+    // in our registry → no tabId → we reopen it but don't close a tab we don't
+    // own. The provider release is authoritative; the tab is someone else's.
+    const h = harness([mk({ status: "claimed" })]);
+    const result = await h.coordinator.releaseIssue(mk({ status: "claimed" }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tabClosed).toBe(false);
+    expect((await h.provider.readIssue(ID)).status).toBe("open");
+    expect(h.calls.some((c) => c[0] === "tab" && c[1] === "close")).toBe(false);
+  });
+
+  it("still reopens the issue if the tab close fails (best-effort)", async () => {
+    // No `tab close` fixture → close throws. The issue is reopened regardless;
+    // the orphan tab is a minor leak the user can close manually.
+    const h = harness([mk()]);
+    await h.coordinator.dispatchIssue(mk());
+    const result = await h.coordinator.releaseIssue(mk());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tabClosed).toBe(false);
+    expect((await h.provider.readIssue(ID)).status).toBe("open");
+    expect(h.claims.tryClaim(ID)).toBe(true);
+  });
+
+  it("surfaces a provider release failure without closing the tab or freeing the mutex", async () => {
+    // provider.release throws (e.g. ClaimBusy) → the issue is still claimed,
+    // the tab still runs, the mutex still held. Retryable as-is.
+    class ReleaseBusy extends FakeProvider {
+      override async release(): Promise<Issue> {
+        throw new ClaimBusy(ID);
+      }
+    }
+    const h = harness([mk()], { provider: new ReleaseBusy([mk()]) });
+    await h.coordinator.dispatchIssue(mk());
+    const result = await h.coordinator.releaseIssue(mk());
+    expect(result.ok).toBe(false);
+    expect(h.calls.some((c) => c[0] === "tab" && c[1] === "close")).toBe(false);
+    expect(h.claims.has(ID)).toBe(true); // mutex still held — still our dispatch
   });
 });

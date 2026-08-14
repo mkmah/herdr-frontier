@@ -23,22 +23,32 @@ import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.j
  * provider's atomic write is the real mutex (two processes cannot both flip
  * `Status: claimed`); this registry adds the cheap in-session short-circuit so
  * a double-`Enter` in one process never reaches the filesystem lock, and tracks
- * the herdr pane each dispatched issue landed in. Each entry records:
+ * the herdr tab each dispatched issue landed in. Each entry records:
  *  - `confirmed`: the tracker has shown `claimed` (the dispatch's claim has been
  *    observed on reload). After that, a return to `open` is a reset →
  *    re-dispatchable; until then, an `open` status is the pre-reload window.
- *  - `paneId` + `dispatchedAt`: which herdr pane hosts the agent, and when we
- *    dispatched — used to release a dispatch whose tab was closed before its
- *    claim was first observed (otherwise it would hang as "already dispatched").
+ *  - `tabId` + `paneId`: which herdr tab/pane hosts the agent — `tabId` drives
+ *    `releaseIssue`'s tab close, `paneId` drives dead-dispatch reconciliation.
+ *  - `dispatchedAt`: when we dispatched — the grace clock for the dead-dispatch
+ *    check (release a dispatch whose tab closed before its claim was observed).
  */
 export class ClaimRegistry {
-  private readonly claimed = new Map<string, { confirmed: boolean; paneId?: string; dispatchedAt: number }>();
+  private readonly claimed = new Map<
+    string,
+    { confirmed: boolean; tabId?: string; paneId?: string; dispatchedAt: number }
+  >();
 
   /** Claim `id` for this session; false when it is already claimed. */
   tryClaim(id: string): boolean {
     if (this.claimed.has(id)) return false;
     this.claimed.set(id, { confirmed: false, dispatchedAt: Date.now() });
     return true;
+  }
+
+  /** Record the herdr tab the agent landed in (after `tab create`). */
+  setTabId(id: string, tabId: string): void {
+    const entry = this.claimed.get(id);
+    if (entry) entry.tabId = tabId;
   }
 
   /** Record the herdr pane the agent landed in (after `tab create`). */
@@ -70,6 +80,10 @@ export class ClaimRegistry {
 
   paneIdOf(id: string): string | undefined {
     return this.claimed.get(id)?.paneId;
+  }
+
+  tabIdOf(id: string): string | undefined {
+    return this.claimed.get(id)?.tabId;
   }
 
   dispatchedAtOf(id: string): number | undefined {
@@ -138,6 +152,11 @@ export type DispatchResult =
     }
   | { ok: false; issue: Issue; command: string | null; reason: DispatchFailureReason };
 
+/** The inverse of {@link DispatchResult} — stop an in-flight issue and reopen it. */
+export type ReleaseResult =
+  | { ok: true; issue: Issue; tabClosed: boolean }
+  | { ok: false; issue: Issue; message: string };
+
 export class DispatchCoordinator {
   constructor(private readonly deps: DispatchDeps) {}
 
@@ -153,10 +172,10 @@ export class DispatchCoordinator {
    * {@link AlreadyClaimed} (`already-claimed`, issue 12 acceptance #3); a
    * contended/stale claim lock raises {@link ClaimBusy} (`claim-busy` — no status
    * was written, so the issue is still open and the dispatch is retryable). A
-   * herdr failure after a successful claim releases the in-session mutex; the
-   * issue stays claimed (there is no un-claim verb) until manually reset to
-   * `open`.
-   */
+    * herdr failure after a successful claim releases the in-session mutex; the
+    * issue stays claimed until {@link DispatchCoordinator.releaseIssue} reopens
+    * it (or it's manually reset to `open`).
+    */
   async dispatchIssue(issue: Issue): Promise<DispatchResult> {
     const outcome = dispatch(issue);
     if (outcome.kind !== "implement" && outcome.kind !== "wayfinder") {
@@ -177,11 +196,12 @@ export class DispatchCoordinator {
       const claimed = await this.deps.provider.claim(issue.id);
       const profile = resolveProfile(this.deps.profiles, profileKeyFor(issue));
       const name = sessionNameFor(issue.id);
-      const { paneId } = await this.deps.client.createTab({
+      const { paneId, tabId } = await this.deps.client.createTab({
         cwd: this.deps.cwd ?? process.cwd(),
         label: tabLabelFor(issue),
         focus: false,
       });
+      this.deps.claims.setTabId(issue.id, tabId);
       this.deps.claims.setPaneId(issue.id, paneId);
       await this.deps.client.startAgent({ name, kind: profile.kind, pane: paneId, args: profile.args });
       await this.deps.client.prompt(name, command, paneId);
@@ -201,11 +221,45 @@ export class DispatchCoordinator {
         return { ok: false, issue, command, reason: "claim-busy" };
       }
       // The handoff failed (herdr error, etc.) — release the in-session mutex so
-      // a retry is possible after the issue is reset to `open`. The provider
-      // exposes no un-claim, so the claim itself stays until a manual reset.
+      // a retry is possible. The claim itself stays on the tracker until
+      // `releaseIssue` (or a manual reset) reopens it.
       this.deps.claims.release(issue.id);
       throw e;
     }
+  }
+
+  /**
+   * Stop an in-flight Issue and reopen it (the inverse of {@link dispatchIssue}):
+   * release the tracker claim (`Status:` → `open`, atomic), then close the herdr
+   * tab THIS session spawned for it (best-effort), then free the in-session
+   * mutex so the issue is re-dispatchable. The provider release is authoritative
+   * — on its failure (e.g. {@link ClaimBusy}) nothing else happens: the issue
+   * stays claimed, the tab keeps running, and the mutex stays held (retryable).
+   * A foreign/stale claim (no tab tracked in this session) is reopened but its
+   * tab — which we didn't create — is left untouched.
+   */
+  async releaseIssue(issue: Issue): Promise<ReleaseResult> {
+    let released: Issue;
+    try {
+      released = await this.deps.provider.release(issue.id);
+    } catch (e) {
+      return { ok: false, issue, message: e instanceof Error ? e.message : String(e) };
+    }
+    // Close the tab this dispatch created, if any. Best-effort: a failed close
+    // (already gone, herdr error) doesn't block the reopen — the issue is open
+    // and re-dispatchable; the orphan tab is a minor leak the user can close.
+    const tabId = this.deps.claims.tabIdOf(issue.id);
+    let tabClosed = false;
+    if (tabId) {
+      try {
+        await this.deps.client.closeTab(tabId);
+        tabClosed = true;
+      } catch {
+        // swallow — see above
+      }
+    }
+    this.deps.claims.release(issue.id);
+    return { ok: true, issue: released, tabClosed };
   }
 
   /**

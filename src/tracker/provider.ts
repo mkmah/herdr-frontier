@@ -72,6 +72,9 @@ export interface TrackerProvider {
   readIssue(id: string): Promise<IssueDetail>;
   /** Mutex intent. */
   claim(id: string): Promise<Issue>;
+  /** Release a claim — the inverse of {@link claim}: reset status to `open`
+   *  (idempotent on an already-open issue). Used to stop/reopen in-flight work. */
+  release(id: string): Promise<Issue>;
   /** Throws {@link LabelNotInMap} when a label is not in the adapter's map. */
   updateLabels(id: string, add?: string[], remove?: string[]): Promise<Issue>;
   /** Resolve + post answer in one call. */

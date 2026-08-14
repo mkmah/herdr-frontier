@@ -11,7 +11,7 @@ never downcasts to a backend.
 
 ## Decision
 
-A **deep, narrow interface** — 7 verbs — where the read side collapses into one materialized
+A **deep, narrow interface** — 8 verbs — where the read side collapses into one materialized
 record and only the write side stays factored into distinct operations.
 
 ```ts
@@ -45,6 +45,7 @@ export interface TrackerProvider {
   listIssues(filter?: IssueFilter): Promise<Issue[]>;            // low-res; no bodies
   readIssue(id: string): Promise<IssueDetail>;                  // zoom one
   claim(id: string): Promise<Issue>;                            // mutex intent
+  release(id: string): Promise<Issue>;                          // release a claim (* → open)
   updateLabels(id: string, add?: string[], remove?: string[]): Promise<Issue>;
   close(id: string, resolution: string): Promise<Issue>;        // resolve + post answer
   comment(id: string, body: string): Promise<Issue>;            // non-terminal talk
@@ -114,6 +115,16 @@ record gained two **optional, display-only scalars**: `tasks?: { done, total }` 
 a tracker that can't count sub-tasks omits it) and `updatedAt?: number` (last-modified epoch ms;
 every tracker has this). The 7-verb seam, the label model, and the list/zoom split are unchanged;
 this is a data-field addition inside the existing record, not a new verb or behavior.
+
+## Extension (issue 12 — `release` verb)
+
+Manual dispatch needed a way to **stop/reopen** in-flight work: reset a dispatched issue
+(`claimed`, agent running in a herdr pane) back to `open` and close its pane. The orchestrator
+must not edit tracker state out-of-band, so `release` earns a named verb as the symmetric inverse
+of `claim` — `claim(id)` is the mutex intent (`open`→`claimed`, atomic); `release(id)` releases
+it (`*`→`open`, atomic, idempotent on an already-open issue so `mtime`/age is preserved). The seam
+grows from 7 to 8 verbs; the read-side collapse and the label model are unchanged. Cross-session
+coordination (which release closes which herdr tab) stays orchestrator-side, as it does for claim.
 
 ## Consequences
 

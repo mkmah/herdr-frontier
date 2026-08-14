@@ -52,6 +52,13 @@ type DispatchUi =
   | { status: "ok"; issueId: string; paneId: string; command: string }
   | { status: "error"; issueId: string; message: string };
 
+/** The detail pane's release/stop feedback, scoped to the issue it released. */
+type ReleaseUi =
+  | { status: "idle" }
+  | { status: "running"; issueId: string }
+  | { status: "ok"; issueId: string; tabClosed: boolean }
+  | { status: "error"; issueId: string; message: string };
+
 /** Chip background for a canonical label — wayfinder → brand, else the triage palette. */
 function Chip(props: { label: string }) {
   return (
@@ -78,6 +85,7 @@ export const App: Component<AppProps> = (props) => {
   const [detail, setDetail] = createSignal<IssueDetail | null>(props.initialDetail ?? null);
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [dispatchState, setDispatchState] = createSignal<DispatchUi>({ status: "idle" });
+  const [releaseState, setReleaseState] = createSignal<ReleaseUi>({ status: "idle" });
   const [tick, setTick] = createSignal(0); // attention pulse
 
   async function load() {
@@ -173,6 +181,28 @@ export const App: Component<AppProps> = (props) => {
     }
   }
 
+  // --- stop / reopen an in-flight issue (the inverse of dispatch) ----------
+  // `x` reopens the selected Issue (status → open) and closes the herdr tab this
+  // session spawned for it. The provider release is authoritative; we optimistically
+  // reflect the reopen in the list so the row flips back without a full reload
+  // (which would reset the cursor). The background poll reconciles anything stale.
+  async function doRelease() {
+    const sel = selected();
+    if (!sel || !props.dispatchCoordinator) return;
+    setReleaseState({ status: "running", issueId: sel.id });
+    try {
+      const r = await props.dispatchCoordinator.releaseIssue(sel);
+      if (r.ok) {
+        setReleaseState({ status: "ok", issueId: sel.id, tabClosed: r.tabClosed });
+        setIssues((prev) => prev.map((i) => (i.id === sel.id ? { ...i, status: "open" } : i)));
+      } else {
+        setReleaseState({ status: "error", issueId: sel.id, message: r.message });
+      }
+    } catch (e) {
+      setReleaseState({ status: "error", issueId: sel.id, message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   // --- mouse support (prototype 08's behavior, applied to the real shell) ---
   // Click a row = select + focus the list. Wheel over the list = move the
   // cursor. Click the detail pane = focus detail. Double-click a row = dispatch
@@ -208,6 +238,7 @@ export const App: Component<AppProps> = (props) => {
     else if (key.name === "j" || key.name === "down") move(1);
     else if (key.name === "k" || key.name === "up") move(-1);
     else if (key.name === "return") void doDispatch();
+    else if (key.name === "x") void doRelease();
     else if (key.name === "r") void load();
   });
 
@@ -245,9 +276,9 @@ export const App: Component<AppProps> = (props) => {
 
   // Key for the detail pane's content. Includes the selection, whether the body
   // read has landed (L/P/E), the pane width (for header re-truncation), and the
-  // dispatch state (so the pane remounts when dispatch feedback changes). A keyed
-  // <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint text
-  // or props in place, so the pane must remount when the read lands or the
+  // dispatch/release feedback (so the pane remounts when either changes). A
+  // keyed <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint
+  // text or props in place, so the pane must remount when the read lands or the
   // loaded body would never appear (same workaround as the list-row selection
   // background and pulse).
   const detailKey = createMemo(() => {
@@ -258,7 +289,9 @@ export const App: Component<AppProps> = (props) => {
     const ds = dispatchState();
     const dispatchPart =
       ds.status === "idle" ? "I" : ds.status === "running" ? "R" : ds.status === "ok" ? `ok:${ds.paneId}` : "E";
-    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}|${dispatchPart}`;
+    const rs = releaseState();
+    const releasePart = rs.status === "idle" ? "I" : rs.status === "running" ? "R" : rs.status === "ok" ? `ok:${rs.tabClosed ? 1 : 0}` : "E";
+    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerW()}|${dispatchPart}|${releasePart}`;
   });
 
   const openCount = () => issues().filter((i) => i.status === "open").length;
@@ -402,6 +435,8 @@ export const App: Component<AppProps> = (props) => {
                 const dispatchable = outcome.kind === "implement" || outcome.kind === "wayfinder";
                 const ds = dispatchState();
                 const showDispatch = ds.status !== "idle" && ds.issueId === sel.id;
+                const rs = releaseState();
+                const showRelease = rs.status !== "idle" && rs.issueId === sel.id;
                 return (
                   <box flexDirection="column" flexGrow={1}>
                     <box flexDirection="row">
@@ -448,6 +483,26 @@ export const App: Component<AppProps> = (props) => {
                             : "⟳ dispatching…"}
                       </text>
                     ) : null}
+                    {showRelease ? (
+                      <text
+                        fg={
+                          rs.status === "ok"
+                            ? THEME.state.done
+                            : rs.status === "error"
+                              ? THEME.state.blocked
+                              : THEME.state.running
+                        }
+                        attributes={TextAttributes.BOLD}
+                      >
+                        {rs.status === "ok"
+                          ? rs.tabClosed
+                            ? "↳ reopened — tab closed"
+                            : "↳ reopened (tab left open)"
+                          : rs.status === "error"
+                            ? `✗ ${rs.message}`
+                            : "⟳ stopping…"}
+                      </text>
+                    ) : null}
                     {loaded ? (
                       <RoleText role="body">{body}</RoleText>
                     ) : (
@@ -463,7 +518,7 @@ export const App: Component<AppProps> = (props) => {
 
       {/* footer */}
       <box flexGrow={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · r reload · q quit</RoleText>
+        <RoleText role="meta">Tab pane · j/k move · Enter dispatch · x stop+reopen · r reload · q quit</RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}

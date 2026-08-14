@@ -205,6 +205,11 @@ export class HerdrClient {
     return { tabId, paneId };
   }
 
+  /** `herdr tab close <tab_id>` — closes the tab (and its panes) a dispatch spawned. */
+  async closeTab(tabId: string): Promise<void> {
+    await this.run(["tab", "close", tabId]);
+  }
+
   /** Start the agent in a pane: `agent start`, shaped to the server's schema. */
   async startAgent(o: StartOptions): Promise<void> {
     const api = await this.detectStartApi();

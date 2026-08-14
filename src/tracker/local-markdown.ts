@@ -3,8 +3,8 @@
 // Issues are markdown files at `<repoRoot>/.scratch/<effort>/issues/<file>.md`.
 // The `id` is the repo-relative file path (posix slashes); the effort directory
 // (the `<effort>` segment) is what a TUI groups by. This skeleton implements
-// the READ side (`listIssues` / `readIssue`) fully; the write verbs throw —
-// they land in later issues.
+// the READ side (`listIssues` / `readIssue`) fully plus the `claim`/`release`
+// mutex verbs; the remaining write verbs throw — they land in later issues.
 //
 // Canonical file format (what `serializeIssue` writes and the parser reads):
 //
@@ -79,7 +79,7 @@ export class LocalMarkdownProvider implements TrackerProvider {
     }
   }
 
-  // -- write side: claim is live; the rest lands in later issues ------------
+  // -- write side: claim + release are live; the rest lands in later issues ---
   // Signatures match ADR-0001 so the shape stays visible for later issues;
   // each not-yet-implemented verb throws until it lands.
 
@@ -104,6 +104,31 @@ export class LocalMarkdownProvider implements TrackerProvider {
       const fm = parseFrontmatter(content, id);
       if (fm.status !== "open") throw new AlreadyClaimed(id, fm.status);
       const updated = setStatusLine(content, fm.bodyStart, "claimed");
+      await atomicWrite(abs, updated);
+      return parseIssue(updated, id);
+    });
+  }
+
+  /**
+   * Release a claim — the inverse of {@link claim}: flip `Status:` back to
+   * `open`, atomically, under the same exclusive lock so a concurrent claim (or
+   * another release) can't tear. Idempotent on an already-open issue — it
+   * short-circuits without rewriting, so `mtime` (the row's age column) is
+   * preserved. Used to stop/reopen in-flight work (issue 12). Throws
+   * {@link IssueNotFound} when the file is absent.
+   */
+  async release(id: string): Promise<Issue> {
+    const abs = join(this.repoRoot, ...id.split("/"));
+    return withClaimLock(abs, async () => {
+      let content: string;
+      try {
+        content = await readFile(abs, "utf8");
+      } catch {
+        throw new IssueNotFound(id);
+      }
+      const fm = parseFrontmatter(content, id);
+      if (fm.status === "open") return parseIssue(content, id); // no-op, mtime preserved
+      const updated = setStatusLine(content, fm.bodyStart, "open");
       await atomicWrite(abs, updated);
       return parseIssue(updated, id);
     });

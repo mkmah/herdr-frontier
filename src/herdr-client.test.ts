@@ -186,6 +186,23 @@ describe("HerdrClient.createTab (canned tab create JSON)", () => {
   });
 });
 
+describe("HerdrClient.closeTab (canned tab close)", () => {
+  it("issues `tab close <tab_id>`", async () => {
+    const { runner, calls } = fixtureRunner({
+      "tab close wZ:t2": JSON.stringify({ id: "cli:tab:close", result: {} }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.closeTab("wZ:t2");
+    expect(calls.map((c) => c.join(" "))).toContain("tab close wZ:t2");
+  });
+
+  it("surfaces a non-zero exit as a HerdrError (no silent close)", async () => {
+    const { runner } = fixtureRunner({}); // no fixture → fixtureRunner returns code 1
+    const client = new HerdrClient({ runner });
+    await expect(client.closeTab("wZ:t2")).rejects.toThrow(/tab close wZ:t2 exited 1/);
+  });
+});
+
 // --- prompt-API shim --------------------------------------------------------
 
 describe("HerdrClient.prompt — the prompt-API shim (issue 12)", () => {

@@ -40,6 +40,7 @@ const noopProvider: TrackerProvider = {
   listIssues: async () => [],
   readIssue: async () => { throw new Error("noop"); },
   claim: async () => { throw new Error("noop"); },
+  release: async () => { throw new Error("noop"); },
   updateLabels: async () => { throw new Error("noop"); },
   close: async () => { throw new Error("noop"); },
   comment: async () => { throw new Error("noop"); },
@@ -252,6 +253,21 @@ describe("App (initial render smoke — two-pane shell)", () => {
     await setup.flush();
     const frame = setup.captureCharFrame();
     expect(frame).toContain("(no auto-dispatch — human turn)");
+    setup.renderer.destroy();
+  });
+
+  // Issue 12: `x` stops + reopens an in-flight issue. The OpenTUI test renderer
+  // is one-shot (no reactivity), so the keypress itself is covered by the
+  // dispatch/coordinator unit tests; here we assert the binding is surfaced in
+  // the footer help.
+  it("advertises the x stop+reopen binding in the footer", async () => {
+    const issue = mk();
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[issue]} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    expect(setup.captureCharFrame()).toContain("x stop+reopen");
     setup.renderer.destroy();
   });
 });
