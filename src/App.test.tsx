@@ -19,8 +19,10 @@ import {
   issueNum,
   moveCursor,
   effortOf,
+  rowTitleBudget,
   sortIssues,
   triageOf,
+  trunc,
   type Row,
 } from "./logic.js";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
@@ -146,6 +148,44 @@ describe("logic: moveCursor wraps and clamps", () => {
     expect(moveCursor(5, 1, 0)).toBe(0);
   });
 });
+
+describe("logic: trunc — ellipsis, floor at 0 (issue 16)", () => {
+  it("returns the string unchanged when it fits", () => {
+    expect(trunc("abc", 3)).toBe("abc");
+  });
+  it("replaces the tail with an ellipsis", () => {
+    expect(trunc("abcdef", 4)).toBe("abc…");
+  });
+  it("floors at 0 so a narrow pane never wraps a row", () => {
+    expect(trunc("abc", 0)).toBe("");
+    expect(trunc("abc", -5)).toBe("");
+  });
+  it("is a bare ellipsis for a 1-char budget", () => {
+    expect(trunc("abc", 1)).toBe("…");
+  });
+});
+
+describe("logic: rowTitleBudget — non-collapsing segments, floor at 0 (issue 16)", () => {
+  it("reserves #id, tasks, and age at full width — only the title flexes", () => {
+    // innerW 40: glyph(2) + #id(3) + 2 lead + tasks(3+1) + age(2+1) = 14 reserved → 26
+    expect(rowTitleBudget({ innerW: 40, branchLen: 0, idLen: 3, tasksLen: 3, ageLen: 2, depth: 0 })).toBe(26);
+    // a longer #id shrinks the budget by exactly its added width
+    expect(rowTitleBudget({ innerW: 40, branchLen: 0, idLen: 5, tasksLen: 3, ageLen: 2, depth: 0 })).toBe(24);
+  });
+  it("floors at 0 so a narrow pane never wraps a row to a second line", () => {
+    expect(rowTitleBudget({ innerW: 10, branchLen: 0, idLen: 3, tasksLen: 3, ageLen: 2, depth: 0 })).toBe(0);
+    expect(rowTitleBudget({ innerW: 0, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0, depth: 2 })).toBe(0);
+  });
+  it("reserves the tree branch connector so the title never collides with it", () => {
+    const base = { innerW: 60, idLen: 3, tasksLen: 0, ageLen: 0, depth: 0 };
+    expect(rowTitleBudget({ ...base, branchLen: 3 })).toBe(rowTitleBudget({ ...base, branchLen: 0 }) - 3);
+  });
+  it("subtracts the tree depth padding", () => {
+    const base = { innerW: 60, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0 };
+    expect(rowTitleBudget({ ...base, depth: 2 })).toBe(rowTitleBudget({ ...base, depth: 0 }) - 4);
+  });
+});
+
 
 describe("App (initial render smoke — two-pane shell)", () => {
   it("paints a 40/60 shell with group headers, ghui-style rows, and the detail fields", async () => {
@@ -401,6 +441,61 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const frame = setup.captureCharFrame();
     expect(frame).not.toContain("Dependencies");
     expect(frame).not.toContain("└─");
+    setup.renderer.destroy();
+  });
+
+  // Issue 16 acceptance: long titles truncate with an ellipsis and rows never
+  // wrap to a second line — even when the pane is too narrow for the full title.
+  // Robust probe: when the row truncates, the title's distinguishing tail is
+  // replaced by "…" and so appears NOWHERE in the frame; a wrapped row would
+  // still carry the tail on its second line. (Mouse selection/double-click/
+  // wheel are covered by the pure trackClick/wheelDelta seam in display.test.)
+  it("truncates a long list-row title with an ellipsis and never wraps", async () => {
+    const long = mk({
+      id: ".scratch/herdr-beads/issues/16-long.md",
+      title: "16 — Long title that must truncate cleanly across a narrow pane",
+    });
+    const detail: IssueDetail = { ...long, body: "", comments: [] };
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[long]} initialDetail={detail} />,
+      { width: 100, height: 16 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the row truncates — the tail is gone from every line (list row + header)
+    expect(frame).toContain("…");
+    expect(frame).not.toContain("across a narrow pane");
+    // the row's title segment is present, truncated, on one line
+    expect(frame).toContain("Long title that must");
+    setup.renderer.destroy();
+  });
+
+  it("truncates a tree-row title with an ellipsis and never wraps", async () => {
+    const root = mk({
+      id: ".scratch/herdr-beads/issues/01-a.md",
+      title: "01 — Alpha",
+    });
+    const child = mk({
+      id: ".scratch/herdr-beads/issues/02-b.md",
+      title: "02 — Beta with a tree-row title far too long to ever fit the pane",
+      blockedBy: ["01"],
+    });
+    const detail: IssueDetail = { ...root, body: "", comments: [] };
+    const setup = await testRender(
+      () => (
+        <App
+          provider={noopProvider}
+          initialIssues={[root, child]}
+          initialDetail={detail}
+          initialView="tree"
+        />
+      ),
+      { width: 60, height: 24 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("…");
+    expect(frame).not.toContain("far too long");
     setup.renderer.destroy();
   });
 });

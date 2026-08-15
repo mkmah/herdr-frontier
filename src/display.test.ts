@@ -12,6 +12,9 @@ import {
   iconFor,
   isHumanTurn,
   listStateOf,
+  trackClick,
+  wheelDelta,
+  MouseButton,
   type ListState,
 } from "./display.js";
 import { iconColor, stateColor, triageColor } from "./theme.js";
@@ -155,6 +158,49 @@ describe("cycleFocus", () => {
   it("toggles between list and detail", () => {
     expect(cycleFocus("list")).toBe("detail");
     expect(cycleFocus("detail")).toBe("list");
+  });
+});
+
+// Issue 16: the mouse seam — the pure derivations behind the shell's pointer
+// handling, extracted so they're testable without the OpenTUI harness: the
+// double-click state machine and the wheel-to-delta mapping.
+describe("trackClick (issue 16 mouse)", () => {
+  it("returns a single click with a pending record on the first click", () => {
+    expect(trackClick(null, "05", 1000)).toEqual({ double: false, next: { id: "05", at: 1000 } });
+  });
+  it("fires a double-click when the same id returns inside the window", () => {
+    expect(trackClick({ id: "05", at: 1000 }, "05", 1300)).toEqual({ double: true, next: null });
+  });
+  it("resets so a third click inside the window is a fresh single", () => {
+    const first = trackClick(null, "05", 1000);
+    const second = trackClick(first.next, "05", 1300);
+    expect(second.double).toBe(true);
+    const third = trackClick(second.next, "05", 1400);
+    expect(third).toEqual({ double: false, next: { id: "05", at: 1400 } });
+  });
+  it("is a single when a different row is clicked", () => {
+    expect(trackClick({ id: "05", at: 1000 }, "06", 1100)).toEqual({
+      double: false,
+      next: { id: "06", at: 1100 },
+    });
+  });
+  it("is a single when the click lands outside the window", () => {
+    expect(trackClick({ id: "05", at: 1000 }, "05", 1400)).toEqual({
+      double: false,
+      next: { id: "05", at: 1400 },
+    });
+  });
+});
+
+describe("wheelDelta (issue 16 mouse)", () => {
+  it("maps wheel up to -1 and wheel down to +1", () => {
+    expect(wheelDelta(MouseButton.WHEEL_UP)).toBe(-1);
+    expect(wheelDelta(MouseButton.WHEEL_DOWN)).toBe(1);
+  });
+  it("maps every non-wheel button to 0", () => {
+    expect(wheelDelta(MouseButton.LEFT)).toBe(0);
+    expect(wheelDelta(MouseButton.MIDDLE)).toBe(0);
+    expect(wheelDelta(MouseButton.RIGHT)).toBe(0);
   });
 });
 

@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, type Component } from "solid-js";
-import { MouseButton, TextAttributes, type MouseEvent } from "@opentui/core";
+import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import type { AgentStatus } from "./herdr-client.js";
@@ -27,10 +27,21 @@ import {
   effortOf,
   issueNum,
   moveCursor,
+  rowTitleBudget,
   sortIssues,
   trunc,
 } from "./logic.js";
-import { cycleFocus, humanizeAge, iconFor, isHumanTurn, type Focus } from "./display.js";
+import {
+  cycleFocus,
+  humanizeAge,
+  iconFor,
+  isHumanTurn,
+  trackClick,
+  wheelDelta,
+  MouseButton,
+  type ClickRecord,
+  type Focus,
+} from "./display.js";
 import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
 import { buildForest, flattenForest } from "./tree.js";
 import { dispatch } from "./orchestrator.js";
@@ -39,6 +50,15 @@ import { copySelection } from "./selection.js";
 
 /** The two top-level views: the primary list and the secondary dependency tree. */
 export type AppView = "list" | "tree";
+
+// The scrollbox that carries a pane's rows renders its content 2 columns
+// narrower than the pane's border-padding math predicts (measured empirically
+// at widths 50/58/60/70/100, in both the list and the tree rows — see the width
+// comments below). A row's title budget is floored at 0, but a budget even one
+// char too generous wraps the row to a second line, so both panes budget this
+// inset. The detail pane is exact at −4 because its scrollbox declares its own
+// 1+1 padding (see DetailPane), so only the row-carrying scrollboxes use this.
+const ROW_SCROLLBOX_INSET = 6;
 
 export interface AppProps {
   provider: TrackerProvider;
@@ -143,7 +163,9 @@ export const App: Component<AppProps> = (props) => {
   const [view, setView] = createSignal<AppView>(props.initialView ?? "list");
   // The tree view's cursor over the flattened forward-forest rows.
   const [treeCursor, setTreeCursor] = createSignal(0);
-  // The tree scrollbox ref — auto-scrolls the cursor row into view (issue 15).
+  // Scrollbox refs — auto-scroll the cursor row into view: the list pane's on
+  // cursor movement, the tree's on tree-cursor movement (issue 15 / 16).
+  let listScroll: any = null;
   let treeScroll: any = null;
 
   async function load() {
@@ -274,6 +296,18 @@ export const App: Component<AppProps> = (props) => {
       }
     }
   });
+  // Auto-scroll the list cursor into view (issue 16) — the list pane's rows
+  // can outgrow the pane, so the cursor follows selection, wheel, and mouse.
+  createEffect(() => {
+    const row = rows()[cursor()];
+    if (row && row.kind === "issue" && listScroll) {
+      try {
+        listScroll.scrollChildIntoView(row.issue.id);
+      } catch {
+        // best-effort — a scrollbox quirk must not break cursor movement
+      }
+    }
+  });
 
   // --- manual dispatch (issue 12) ------------------------------------------
   // `Enter` (or double-click) dispatches the selected Issue: claim → resolve
@@ -368,22 +402,17 @@ export const App: Component<AppProps> = (props) => {
     const idx = issues().findIndex((i) => i.id === id);
     if (idx >= 0) setCursor(idx);
   }
-  let lastClick: { id: string; at: number } | null = null;
+  let lastClick: ClickRecord | null = null;
   function onRowMouseDown(e: MouseEvent, id: string) {
     if (e.button !== MouseButton.LEFT) return;
     setFocus("list");
     selectById(id);
-    const now = Date.now();
-    if (lastClick && lastClick.id === id && now - lastClick.at < 400) {
-      lastClick = null;
-      void doDispatch();
-    } else {
-      lastClick = { id, at: now };
-    }
+    const click = trackClick(lastClick, id, Date.now());
+    lastClick = click.next;
+    if (click.double) void doDispatch();
   }
   function onListWheel(e: MouseEvent) {
-    if (e.button === MouseButton.WHEEL_UP) move(-1);
-    else if (e.button === MouseButton.WHEEL_DOWN) move(1);
+    move(wheelDelta(e.button));
   }
   function onDetailMouseDown(e: MouseEvent) {
     if (e.button === MouseButton.LEFT) setFocus("detail");
@@ -395,22 +424,17 @@ export const App: Component<AppProps> = (props) => {
     const idx = treeRows().findIndex((r) => r.issue.id === id);
     if (idx >= 0) setTreeCursor(idx);
   }
-  let lastTreeClick: { id: string; at: number } | null = null;
+  let lastTreeClick: ClickRecord | null = null;
   function onTreeRowMouseDown(e: MouseEvent, id: string) {
     if (e.button !== MouseButton.LEFT) return;
     setFocus("list");
     selectTreeById(id);
-    const now = Date.now();
-    if (lastTreeClick && lastTreeClick.id === id && now - lastTreeClick.at < 400) {
-      lastTreeClick = null;
-      void doDispatch();
-    } else {
-      lastTreeClick = { id, at: now };
-    }
+    const click = trackClick(lastTreeClick, id, Date.now());
+    lastTreeClick = click.next;
+    if (click.double) void doDispatch();
   }
   function onTreeWheel(e: MouseEvent) {
-    if (e.button === MouseButton.WHEEL_UP) treeMove(-1);
-    else if (e.button === MouseButton.WHEEL_DOWN) treeMove(1);
+    treeMove(wheelDelta(e.button));
   }
 
   useKeyboard((key) => {
@@ -479,11 +503,19 @@ export const App: Component<AppProps> = (props) => {
   // push the split around; flexGrow absorbs only a column of rounding slack.
   const listPaneW = () => Math.max(0, Math.floor(dims().width * 0.4));
   const detailPaneW = () => Math.max(0, Math.floor(dims().width * 0.6));
-  const listInnerW = () => Math.max(0, listPaneW() - 4); // 2 border + 2 padding
+  // The list rows sit in a scrollbox whose content is `ROW_SCROLLBOX_INSET`
+  // columns narrower than the pane inner (measured empirically — same as the
+  // tree rows, see treeInnerW below), so the list budgets 2 fewer than
+  // "pane − border − padding" would suggest. A row budget that's even one char
+  // too generous wraps the row to a second line.
+  const listInnerW = () => Math.max(0, listPaneW() - ROW_SCROLLBOX_INSET);
   const detailInnerW = () => Math.max(0, detailPaneW() - 4);
   // The tree view spans the full width: both its lean tree pane and its detail
-  // pane below use the whole column (issue 15).
-  const treeInnerW = () => Math.max(0, dims().width - 4);
+  // pane below use the whole column (issue 15). The tree rows sit in a
+  // scrollbox whose content is `ROW_SCROLLBOX_INSET` columns narrower than the
+  // pane inner — measured, like the list: at width 58 a 40-char child title is
+  // the widest that fits on one line, exactly what `dims − 6` budgets.
+  const treeInnerW = () => Math.max(0, dims().width - ROW_SCROLLBOX_INSET);
   const treeDetailInnerW = () => Math.max(0, dims().width - 4);
   // The detail pane's inner width — which split it sits in depends on the view.
   const detailInnerWFor = () => (view() === "tree" ? treeDetailInnerW() : detailInnerW());
@@ -519,7 +551,8 @@ export const App: Component<AppProps> = (props) => {
   // backgroundColor applies (function accessors aren't applied reactively for
   // this prop in OpenTUI 0.5.1). `depth`/`branch`/`rowId` are the tree's
   // additions: depth via paddingLeft, a branch connector, and `id` on the box
-  // so the tree scrollbox's scrollChildIntoView can find the row.
+  // so the scrollboxes' scrollChildIntoView can find the row (the list pane
+  // passes rowId too, for its cursor auto-scroll).
   const IssueRow: Component<{
     issue: Issue;
     selected: boolean;
@@ -541,9 +574,18 @@ export const App: Component<AppProps> = (props) => {
           const tasksStr = issue.tasks ? `${issue.tasks.done}/${issue.tasks.total}` : "";
           const tasksDone = !!issue.tasks && issue.tasks.done >= issue.tasks.total;
           const ageStr = issue.updatedAt != null ? humanizeAge(issue.updatedAt, Date.now()) : "";
-          const fixed =
-            2 + idStr.length + 2 + (tasksStr ? tasksStr.length + 1 : 0) + (ageStr ? ageStr.length + 1 : 0);
-          const budget = Math.max(0, p.innerW - fixed - depth * 2);
+          // Reserve every non-collapsing segment (`#id`, tasks, age, the tree's
+          // branch connector and depth padding) at full width; only the title
+          // flexes into what remains, floored at 0 so a narrow pane truncates
+          // rather than wrap the row to a second line (issue 16).
+          const budget = rowTitleBudget({
+            innerW: p.innerW,
+            branchLen: p.branch ? p.branch.length : 0,
+            idLen: idStr.length,
+            tasksLen: tasksStr.length,
+            ageLen: ageStr.length,
+            depth,
+          });
           return (
             <box
               id={p.rowId}
@@ -724,7 +766,7 @@ export const App: Component<AppProps> = (props) => {
         title=" Issues "
         titleColor={focus() === "list" ? THEME.border.focused : THEME.text.dim}
       >
-        <scrollbox flexGrow={1} scrollY={true} onMouseScroll={onListWheel}>
+        <scrollbox ref={(el) => (listScroll = el)} flexGrow={1} scrollY={true} onMouseScroll={onListWheel}>
           <For each={rows()}>
             {(row) => {
               switch (row.kind) {
@@ -745,6 +787,7 @@ export const App: Component<AppProps> = (props) => {
                       issue={row.issue}
                       selected={selected()?.id === row.issue.id}
                       innerW={listInnerW()}
+                      rowId={row.issue.id}
                       onMouseDown={(e: MouseEvent) => onRowMouseDown(e, row.issue.id)}
                     />
                   );

@@ -87,3 +87,51 @@ export function humanizeAge(updatedAtMs: number, nowMs: number): string {
 export function cycleFocus(f: Focus): Focus {
   return f === "list" ? "detail" : "list";
 }
+
+// --- mouse seam (issue 16) -------------------------------------------------
+// The pure derivations behind the shell's pointer handling: the double-click
+// state machine and the wheel-to-delta mapping. The component feeds its real
+// `MouseEvent`s in; the button codes mirror @opentui/core's `MouseButton` enum
+// so the seam stays testable without the harness.
+
+/** @opentui/core `MouseButton` codes, mirrored so this module stays harness-free. */
+export const MouseButton = {
+  LEFT: 0,
+  MIDDLE: 1,
+  RIGHT: 2,
+  WHEEL_UP: 4,
+  WHEEL_DOWN: 5,
+} as const;
+
+/** The last row-click the tracker saw, for double-click detection. */
+export interface ClickRecord {
+  id: string;
+  at: number;
+}
+
+/**
+ * Step the double-click state machine with one row-click.
+ *
+ * Returns whether this click forms a double-click (same id inside the
+ * `windowMs` window) and the record to keep for the next click. A double-click
+ * consumes itself (`next` is null), so a third click inside the window counts
+ * as a fresh single — the same reset the handlers used to do by hand.
+ */
+export function trackClick(
+  prev: ClickRecord | null,
+  id: string,
+  at: number,
+  windowMs = 400,
+): { double: boolean; next: ClickRecord | null } {
+  if (prev && prev.id === id && at - prev.at < windowMs) {
+    return { double: true, next: null };
+  }
+  return { double: false, next: { id, at } };
+}
+
+/** Cursor delta for a wheel event: up -1, down +1, any other button 0. */
+export function wheelDelta(button: number): number {
+  if (button === MouseButton.WHEEL_UP) return -1;
+  if (button === MouseButton.WHEEL_DOWN) return 1;
+  return 0;
+}
