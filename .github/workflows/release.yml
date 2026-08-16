@@ -63,7 +63,7 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - name: Run Changesets (version or publish)
-        uses: changesets/action@72b60a2c449090fd1871c5578768a32a76011a9d # v2.1.0
+        uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         with:
           version: bun run version
           publish: bun run release
