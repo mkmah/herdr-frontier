@@ -46,13 +46,15 @@ dependency steals workflow credentials; workflow template injection) and lock
   by the author instead of parsed from commit messages. Cost: one extra file
   per PR; benefit: no write credential, no commit-message convention to
   enforce, and human-readable release notes.
-- **The Version Packages PR carries no CI checks** — PRs opened with
-  `GITHUB_TOKEN` trigger no `pull_request` workflows, so its required checks
-  never appear and it is merged by the owner via the ruleset bypass. Acceptable
-  because its content is machine-generated (version fields + CHANGELOG) from
-  already-CI-passing commits.
-- **Bypass actor over no-bypass.** The owner needs the bypass for the Version
-  Packages PR; everything else merges through gated PRs.
+- **The Version Packages PR is gated like any other.** PRs opened with
+  `GITHUB_TOKEN` trigger no `pull_request` workflows automatically — GitHub
+  requires a one-click "Approve and run" from a write-access human because the
+  author is a bot (built-in anti-recursion gate, not a repo setting). Once
+  approved, `verify` and `zizmor` run on the PR and the ruleset's required
+  checks apply normally; no bypass is needed to merge it.
+- **Bypass actor retained for bootstrapping.** The owner bypass was needed to
+  push the pipeline itself to protected `main`; day-to-day merges (including
+  the Version Packages PR after workflow approval) go through gated PRs.
 
 ## Consequences
 
