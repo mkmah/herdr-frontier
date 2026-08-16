@@ -1,22 +1,22 @@
 {
   "name": "herdr-frontier",
+  "version": "0.1.0",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
     "build": "bun run scripts/build.ts",
-    "policy:check": "bun run src/policy-check.ts"
+    "policy:check": "bun run src/policy-check.ts",
+    "changeset": "changeset",
+    "version": "changeset version && bun scripts/sync-version.ts",
+    "release": "bun scripts/release.ts"
   },
   "devDependencies": {
-    "@semantic-release/commit-analyzer": "^13.0.1",
-    "@semantic-release/exec": "^7.0.3",
-    "@semantic-release/git": "^11.0.1",
-    "@semantic-release/github": "^12.0.0",
-    "@semantic-release/release-notes-generator": "^14.0.3",
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.0",
     "@types/bun": "latest",
-    "@types/node": "^26.2.0",
-    "semantic-release": "^25.0.9"
+    "@types/node": "^26.2.0"
   },
   "peerDependencies": {
     "typescript": "^7.0.2"
