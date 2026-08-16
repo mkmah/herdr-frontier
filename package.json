@@ -13,8 +13,8 @@
     "release": "bun scripts/release.ts"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.1",
-    "@changesets/cli": "^2.29.0",
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^3.0.0",
     "@types/bun": "latest",
     "@types/node": "^26.2.0"
   },
