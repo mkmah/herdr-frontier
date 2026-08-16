@@ -14,7 +14,7 @@ import type { Issue } from "./tracker/provider.js";
 import { attentionTransitions, mapAgentStates } from "./agent-state.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/herdr-beads/issues/13-live.md",
+  id: ".scratch/herdr-frontier/issues/13-live.md",
   title: "13 — Live",
   status: "open",
   type: "task",
@@ -24,8 +24,8 @@ const mk = (over: Partial<Issue> = {}): Issue => ({
   ...over,
 });
 
-const ID = ".scratch/herdr-beads/issues/13-live.md";
-const ID2 = ".scratch/herdr-beads/issues/14-run.md";
+const ID = ".scratch/herdr-frontier/issues/13-live.md";
+const ID2 = ".scratch/herdr-frontier/issues/14-run.md";
 
 const agent = (over: Partial<AgentRecord> = {}): AgentRecord => ({
   agent: "opencode",

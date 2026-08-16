@@ -1,5 +1,5 @@
 // ============================================================================
-// herdr-beads pane entry point (issue 09).
+// herdr-frontier pane entry point (issue 09).
 //
 // herdr spawns this as the `command` of the `beads.issues` `[[panes]]` entry.
 // It builds the local-markdown provider from the workspace cwd, claims herdr's

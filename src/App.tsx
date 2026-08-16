@@ -860,7 +860,7 @@ export const App: Component<AppProps> = (props) => {
           overflows; without it OpenTUI 0.5.1 lays the overflowing pane content
           over the header and the header disappears. */}
       <box flexGrow={0} flexShrink={0} flexDirection="row" paddingLeft={1} paddingRight={1} backgroundColor={THEME.surface.panel}>
-        <RoleText role="h2">◆ herdr-beads</RoleText>
+        <RoleText role="h2">◆ herdr-frontier</RoleText>
         {view() === "tree" ? (
           <>
             <RoleText role="meta">  dependency tree  </RoleText>

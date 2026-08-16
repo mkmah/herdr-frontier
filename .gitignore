@@ -6,6 +6,9 @@ out
 dist
 *.tgz
 
+# compiled plugin binary (built by scripts/build.ts on install)
+bin
+
 # code coverage
 coverage
 *.lcov
@@ -33,5 +36,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Finder (MacOS) folder config
 .DS_Store
 .history
-# herdr-beads runtime state
-.herdr-beads
+# herdr-frontier runtime state
+.herdr-frontier
+# local issue-tracker history (kept out of the public repo)
+.scratch/

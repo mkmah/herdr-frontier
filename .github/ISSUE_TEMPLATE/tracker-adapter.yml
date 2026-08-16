@@ -1,0 +1,32 @@
+name: Tracker adapter
+description: Add support for a new issue tracker behind the TrackerProvider interface
+labels: [enhancement, tracker]
+body:
+  - type: textarea
+    id: tracker
+    attributes:
+      label: Tracker
+      description: Which tracker (beads, GitHub, Jira, Linear, other) and how issues are read from it.
+    validations:
+      required: true
+  - type: textarea
+    id: verbs
+    attributes:
+      label: Interface mapping
+      description: How each of the 8 verbs (listIssues, readIssue, claim, release, updateLabels, close, comment, addBlocking) maps onto the tracker's native operations.
+    validations:
+      required: true
+  - type: textarea
+    id: labels
+    attributes:
+      label: Label-map
+      description: The tracker's native label strings for the 5 triage roles and the wayfinder:* namespace.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Auth model, rate limits, anything an adapter author should know. Or none.
+    validations:
+      required: false

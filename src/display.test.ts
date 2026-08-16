@@ -21,7 +21,7 @@ import { iconColor, stateColor, triageColor } from "./theme.js";
 import { blockerResolved } from "./logic.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/herdr-beads/issues/10-shell.md",
+  id: ".scratch/herdr-frontier/issues/10-shell.md",
   title: "10 — Shell",
   status: "open",
   type: "task",
@@ -206,13 +206,13 @@ describe("wheelDelta (issue 16 mouse)", () => {
 
 describe("blockerResolved", () => {
   const issues = [
-    mk({ id: ".scratch/herdr-beads/issues/05-iface.md", status: "resolved" }),
-    mk({ id: ".scratch/herdr-beads/issues/06-prototype.md", status: "open" }),
+    mk({ id: ".scratch/herdr-frontier/issues/05-iface.md", status: "resolved" }),
+    mk({ id: ".scratch/herdr-frontier/issues/06-prototype.md", status: "open" }),
   ];
-  const ref = mk(); // .scratch/herdr-beads/issues/10-shell.md — same effort as the fixture
+  const ref = mk(); // .scratch/herdr-frontier/issues/10-shell.md — same effort as the fixture
   it("matches a blocker by numeric prefix and by full id, within the same effort", () => {
     expect(blockerResolved("05", ref, issues)).toBe(true);
-    expect(blockerResolved(".scratch/herdr-beads/issues/05-iface.md", ref, issues)).toBe(true);
+    expect(blockerResolved(".scratch/herdr-frontier/issues/05-iface.md", ref, issues)).toBe(true);
   });
   it("is false for an open or unknown blocker", () => {
     expect(blockerResolved("06", ref, issues)).toBe(false);

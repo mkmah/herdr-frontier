@@ -67,16 +67,16 @@ describe("extractResult — chrome-stripping the last meaningful line (issue 17)
 
 describe("structuredTranscriptPath — where a richer transcript lives", () => {
   it("maps an issue file to its transcripts/ sibling under the same effort", () => {
-    expect(structuredTranscriptPath(".scratch/herdr-beads/issues/12-driver.md")).toBe(
-      ".scratch/herdr-beads/transcripts/12-driver.md",
+    expect(structuredTranscriptPath(".scratch/herdr-frontier/issues/12-driver.md")).toBe(
+      ".scratch/herdr-frontier/transcripts/12-driver.md",
     );
   });
 });
 
 // --- ingester ---------------------------------------------------------------
 
-const ISSUE_ID = ".scratch/herdr-beads/issues/12-driver.md";
-const AGENT_NAME = "herdr-beads-12";
+const ISSUE_ID = ".scratch/herdr-frontier/issues/12-driver.md";
+const AGENT_NAME = "herdr-frontier-12";
 
 const SNAPSHOT = ["terminal chrome", "", "resolved #12 — the driver is wired", ""].join("\n");
 
@@ -187,7 +187,7 @@ describe("TranscriptIngester — extract a finished run and write it back (issue
 
   it("prefers a structured transcript file under .scratch/ when the agent wrote one", async () => {
     const h = await ingesterWith();
-    const structured = join(h.repoRoot, ".scratch", "herdr-beads", "transcripts");
+    const structured = join(h.repoRoot, ".scratch", "herdr-frontier", "transcripts");
     await mkdir(structured, { recursive: true });
     await writeFile(join(structured, "12-driver.md"), "structured tool-call dump\nfinal answer", "utf8");
 

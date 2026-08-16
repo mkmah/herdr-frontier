@@ -1,18 +1,22 @@
 {
-  "name": "herdr-beads",
+  "name": "herdr-frontier",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
-    "policy:check": "bun run src/policy-check.ts",
-    "prototype": "bun run src/prototype-shell.tsx",
-    "prototype:tree": "bun run src/prototype-tree.tsx",
-    "prototype:look": "bun run src/prototype-lookfeel.tsx"
+    "build": "bun run scripts/build.ts",
+    "policy:check": "bun run src/policy-check.ts"
   },
   "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/exec": "^7.0.3",
+    "@semantic-release/git": "^11.0.1",
+    "@semantic-release/github": "^12.0.0",
+    "@semantic-release/release-notes-generator": "^14.0.3",
     "@types/bun": "latest",
-    "@types/node": "^26.2.0"
+    "@types/node": "^26.2.0",
+    "semantic-release": "^25.0.9"
   },
   "peerDependencies": {
     "typescript": "^7.0.2"

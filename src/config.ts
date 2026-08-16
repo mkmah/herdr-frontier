@@ -1,9 +1,9 @@
 // Plugin config (issue 17 — repo > user precedence). Config is two TOML
 // layers, both optional, merged with **repo over user** per key:
-//   - user:  `<HERDR_PLUGIN_CONFIG_DIR>/herdr-beads.toml` (herdr injects the
-//     dir; falls back to `~/.config/herdr/plugins/config/herdr-beads`)
-//   - repo:  `<repoRoot>/herdr-beads.toml` — the committed, per-project layer
-//     (mirrors the reference sibling `herdr-beads` config-at-repo-root shape)
+//   - user:  `<HERDR_PLUGIN_CONFIG_DIR>/herdr-frontier.toml` (herdr injects the
+//     dir; falls back to `~/.config/herdr/plugins/config/herdr-frontier`)
+//   - repo:  `<repoRoot>/herdr-frontier.toml` — the committed, per-project layer
+//     (mirrors the reference sibling `herdr-frontier` config-at-repo-root shape)
 //
 // Shape (the same TOML parses for both layers):
 //   [profiles.grilling]  kind = "claude"   args = ["-m", "sonnet"]   # per task type
@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { DEFAULT_PROFILES, type AgentProfile, type ProfileKey, type ProfilesConfig } from "./profiles.js";
 
 /** The config filename in each layer's dir. */
-export const CONFIG_FILE = "herdr-beads.toml";
+export const CONFIG_FILE = "herdr-frontier.toml";
 
 /** The env var herdr injects with the plugin's config dir. */
 export const USER_CONFIG_DIR_KEY = "HERDR_PLUGIN_CONFIG_DIR";
@@ -49,7 +49,7 @@ export interface LoadConfigOptions {
 export function defaultUserConfigDir(): string {
   return (
     process.env[USER_CONFIG_DIR_KEY] ??
-    join(homedir(), ".config", "herdr", "plugins", "config", "herdr-beads")
+    join(homedir(), ".config", "herdr", "plugins", "config", "herdr-frontier")
   );
 }
 

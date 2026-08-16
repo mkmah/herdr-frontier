@@ -6,7 +6,7 @@ import { describe, it, expect } from "bun:test";
 import type { Issue } from "./tracker/provider.js";
 import { frontier, dispatch, autoSpawnable } from "./orchestrator.js";
 
-const EFFORT = ".scratch/herdr-beads/issues/";
+const EFFORT = ".scratch/herdr-frontier/issues/";
 const mkId = (num: string, slug = "item") => `${EFFORT}${num}-${slug}.md`;
 
 const mk = (over: Partial<Issue> = {}): Issue => ({

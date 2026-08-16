@@ -2,7 +2,7 @@
 
 **Status:** accepted
 
-herdr-beads must orchestrate tickets across multiple trackers (local-markdown now;
+herdr-frontier must orchestrate tickets across multiple trackers (local-markdown now;
 beads/GitHub/Jira/Linear later) without the orchestrator knowing which tracker is behind
 it. We decide the shape of that seam: one async `TrackerProvider` interface in `src/tracker/`,
 with one adapter per tracker, behind which all tracker-specific complexity hides. The
@@ -91,7 +91,7 @@ comma-separated. The provider reads **only** `Labels:`; `Status:` (lifecycle) an
 
 ## Label-vocabulary reconciliation
 
-The 5 triage roles + `wayfinder:*` are herdr-beads's **canonical vocabulary** and are the only
+The 5 triage roles + `wayfinder:*` are herdr-frontier's **canonical vocabulary** and are the only
 labels the orchestrator ever sees. Each adapter carries a **label-map** config translating
 canonical ↔ native strings (a Jira "ready-for-agent" might be spelled `rf-agent`); the adapter
 maps on read and write. Remote trackers' native `labels[]` are an adapter-internal detail.

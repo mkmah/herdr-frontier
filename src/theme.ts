@@ -1,4 +1,4 @@
-// Cross-view theme — the single source of truth for herdr-beads' look (issue 10).
+// Cross-view theme — the single source of truth for herdr-frontier' look (issue 10).
 //
 // Locked by prototype 08: one semantic palette (surface/border/state/text/accent)
 // + typography roles (h1/h2/label/body/meta) drive the header, list, detail, and

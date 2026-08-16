@@ -406,5 +406,5 @@ export class DispatchCoordinator {
  */
 function attentionTitle(issue: Issue, agentStatus?: AgentStatus): string {
   const why = agentStatus === "blocked" ? "agent blocked" : "ready for human";
-  return `herdr-beads: ${issueNum(issue.id)} ${why}`;
+  return `herdr-frontier: ${issueNum(issue.id)} ${why}`;
 }

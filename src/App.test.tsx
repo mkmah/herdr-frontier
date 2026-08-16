@@ -52,7 +52,7 @@ const noopProvider: TrackerProvider = {
 
 describe("logic: effortOf / issueNum", () => {
   it("extracts the effort dir and numeric id from a repo-relative path", () => {
-    expect(effortOf(".scratch/herdr-beads/issues/09-skeleton.md")).toBe("herdr-beads");
+    expect(effortOf(".scratch/herdr-frontier/issues/09-skeleton.md")).toBe("herdr-frontier");
     expect(effortOf(".scratch/auth-spec/issues/22-token.md")).toBe("auth-spec");
     expect(issueNum(".scratch/e/issues/09-skeleton.md")).toBe("#09");
     expect(issueNum(".scratch/e/issues/README.md")).toBe("#README");
@@ -94,18 +94,18 @@ describe("logic: sortIssues + buildRows groups by run-root", () => {
   it("sorts by run-root then title and emits group headers with counts", () => {
     const issues = sortIssues([
       mk({ id: ".scratch/auth-spec/issues/22-token.md", title: "22 — Token" }),
-      mk({ id: ".scratch/herdr-beads/issues/09-skeleton.md", title: "09 — Skeleton" }),
-      mk({ id: ".scratch/herdr-beads/issues/05-iface.md", title: "05 — Iface" }),
+      mk({ id: ".scratch/herdr-frontier/issues/09-skeleton.md", title: "09 — Skeleton" }),
+      mk({ id: ".scratch/herdr-frontier/issues/05-iface.md", title: "05 — Iface" }),
     ]);
     const rows = buildRows({ issues, loaded: true, error: null });
     const groups = rows.filter((r): r is Extract<Row, { kind: "group" }> => r.kind === "group");
-    expect(groups.map((g) => g.root)).toEqual(["auth-spec", "herdr-beads"]);
+    expect(groups.map((g) => g.root)).toEqual(["auth-spec", "herdr-frontier"]);
     const byRoot = Object.fromEntries(groups.map((g) => [g.root, g.count]));
     expect(byRoot["auth-spec"]).toBe(1);
-    expect(byRoot["herdr-beads"]).toBe(2);
-    // within herdr-beads, 05 sorts before 09
+    expect(byRoot["herdr-frontier"]).toBe(2);
+    // within herdr-frontier, 05 sorts before 09
     const hbIssues = rows.filter((r): r is Extract<Row, { kind: "issue" }> =>
-      r.kind === "issue" && r.issue.id.includes("herdr-beads"));
+      r.kind === "issue" && r.issue.id.includes("herdr-frontier"));
     expect(hbIssues.map((r) => r.issue.title)).toEqual(["05 — Iface", "09 — Skeleton"]);
   });
 
@@ -190,7 +190,7 @@ describe("logic: rowTitleBudget — non-collapsing segments, floor at 0 (issue 1
 describe("App (initial render smoke — two-pane shell)", () => {
   it("paints a 40/60 shell with group headers, ghui-style rows, and the detail fields", async () => {
     const first = mk({
-      id: ".scratch/herdr-beads/issues/09-skeleton.md",
+      id: ".scratch/herdr-frontier/issues/09-skeleton.md",
       title: "09 — Plugin skeleton",
       status: "claimed",
       labels: ["ready-for-agent", "wayfinder:task"],
@@ -220,7 +220,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const frame = setup.captureCharFrame();
 
     // list pane: grouped rows, #id, truncated titles
-    expect(frame).toContain("herdr-beads");
+    expect(frame).toContain("herdr-frontier");
     expect(frame).toContain("auth-spec");
     expect(frame).toContain("#09");
     expect(frame).toContain("#22");
@@ -249,8 +249,8 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // navigation and the new read resolving), the body must not paint under the
   // wrong title.
   it("does not paint a detail body whose id differs from the selected issue", async () => {
-    const eleven = mk({ id: ".scratch/herdr-beads/issues/11-a.md", title: "11 — A" });
-    const twelve = mk({ id: ".scratch/herdr-beads/issues/12-b.md", title: "12 — B" });
+    const eleven = mk({ id: ".scratch/herdr-frontier/issues/11-a.md", title: "11 — A" });
+    const twelve = mk({ id: ".scratch/herdr-frontier/issues/12-b.md", title: "12 — B" });
     const staleDetail: IssueDetail = {
       ...twelve,
       body: "BODY OF 12 (must not paint under 11)",
@@ -268,11 +268,11 @@ describe("App (initial render smoke — two-pane shell)", () => {
 
   // Regression: header-collapse repaint. When the selected issue's body is long
   // enough to overflow the detail pane, OpenTUI 0.5.1 lays the overflowing
-  // content over the header row and the "herdr-beads ... open ... your-turn"
+  // content over the header row and the "herdr-frontier ... open ... your-turn"
   // header disappears. Rendered through the real reactive renderer (a tall
   // initialDetail paints with no async interleaving, so it reproduces reliably).
   it("keeps the header visible when the detail body overflows the pane", async () => {
-    const tall = mk({ id: ".scratch/herdr-beads/issues/01-x.md", title: "01 — X" });
+    const tall = mk({ id: ".scratch/herdr-frontier/issues/01-x.md", title: "01 — X" });
     const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
     const setup = await testRender(
       () => <App provider={noopProvider} initialIssues={[tall]} initialDetail={detail} />,
@@ -280,7 +280,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     );
     await setup.flush();
     const frame = setup.captureCharFrame();
-    expect(frame.split("\n")[0]).toContain("◆ herdr-beads");
+    expect(frame.split("\n")[0]).toContain("◆ herdr-frontier");
     setup.renderer.destroy();
   });
 
@@ -289,7 +289,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // the "(no auto-dispatch — human turn)" marker, exactly like the prototype).
   it("shows the resolved dispatch command for a dispatchable issue", async () => {
     const impl = mk({
-      id: ".scratch/herdr-beads/issues/12-driver.md",
+      id: ".scratch/herdr-frontier/issues/12-driver.md",
       title: "12 — Driver",
       labels: ["ready-for-agent"],
     });
@@ -303,12 +303,12 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("dispatch:");
     // `{id}` resolves to the issue's identity — the repo-relative .md path for
     // local-markdown — which is exactly the command the agent receives.
-    expect(frame).toContain("/implement .scratch/herdr-beads/issues/12-driver.md");
+    expect(frame).toContain("/implement .scratch/herdr-frontier/issues/12-driver.md");
     setup.renderer.destroy();
   });
 
   it("marks a human turn as not auto-dispatched", async () => {
-    const human = mk({ id: ".scratch/herdr-beads/issues/13-human.md", labels: ["ready-for-human"] });
+    const human = mk({ id: ".scratch/herdr-frontier/issues/13-human.md", labels: ["ready-for-human"] });
     const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
     const setup = await testRender(
       () => <App provider={noopProvider} initialIssues={[human]} initialDetail={detail} />,
@@ -381,7 +381,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // · tasks · age), and the selected node's full detail below.
   it("renders the dependency-tree secondary view (lean tree + detail below)", async () => {
     const root = mk({
-      id: ".scratch/herdr-beads/issues/01-a.md",
+      id: ".scratch/herdr-frontier/issues/01-a.md",
       title: "01 — Alpha",
       status: "claimed",
       labels: ["ready-for-agent", "wayfinder:task"],
@@ -389,7 +389,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       updatedAt: Date.now() - 5 * 3_600_000,
     });
     const child = mk({
-      id: ".scratch/herdr-beads/issues/02-b.md",
+      id: ".scratch/herdr-frontier/issues/02-b.md",
       title: "02 — Beta",
       blockedBy: ["01"],
     });
@@ -424,7 +424,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("wayfinder:task");
     expect(frame).toContain("blocked by:");
     expect(frame).toContain("Root issue body for the tree detail pane.");
-    expect(frame).toContain("/wayfinder .scratch/herdr-beads/issues/01-a.md");
+    expect(frame).toContain("/wayfinder .scratch/herdr-frontier/issues/01-a.md");
     // the primary list pane is not in this view
     expect(frame).not.toContain(" Issues ");
     setup.renderer.destroy();
@@ -452,7 +452,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // wheel are covered by the pure trackClick/wheelDelta seam in display.test.)
   it("truncates a long list-row title with an ellipsis and never wraps", async () => {
     const long = mk({
-      id: ".scratch/herdr-beads/issues/16-long.md",
+      id: ".scratch/herdr-frontier/issues/16-long.md",
       title: "16 — Long title that must truncate cleanly across a narrow pane",
     });
     const detail: IssueDetail = { ...long, body: "", comments: [] };
@@ -472,11 +472,11 @@ describe("App (initial render smoke — two-pane shell)", () => {
 
   it("truncates a tree-row title with an ellipsis and never wraps", async () => {
     const root = mk({
-      id: ".scratch/herdr-beads/issues/01-a.md",
+      id: ".scratch/herdr-frontier/issues/01-a.md",
       title: "01 — Alpha",
     });
     const child = mk({
-      id: ".scratch/herdr-beads/issues/02-b.md",
+      id: ".scratch/herdr-frontier/issues/02-b.md",
       title: "02 — Beta with a tree-row title far too long to ever fit the pane",
       blockedBy: ["01"],
     });

@@ -13,7 +13,7 @@ import {
 } from "./profiles.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/herdr-beads/issues/12-driver.md",
+  id: ".scratch/herdr-frontier/issues/12-driver.md",
   title: "12 — Driver",
   status: "open",
   type: "task",

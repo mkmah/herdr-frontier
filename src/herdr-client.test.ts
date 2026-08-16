@@ -208,13 +208,13 @@ describe("HerdrClient.closeTab (canned tab close)", () => {
 describe("HerdrClient.showNotification (canned notification show)", () => {
   it("issues `notification show <title>` with the title as the first positional", async () => {
     const { runner, calls } = fixtureRunner({
-      "notification show herdr-beads: #13 ready for human": JSON.stringify({ id: "cli:notification:show", result: {} }),
+      "notification show herdr-frontier: #13 ready for human": JSON.stringify({ id: "cli:notification:show", result: {} }),
     });
     const client = new HerdrClient({ runner });
-    await client.showNotification({ title: "herdr-beads: #13 ready for human" });
+    await client.showNotification({ title: "herdr-frontier: #13 ready for human" });
     // The whole title is one positional arg (herdr notification show <TITLE>),
     // so the shell-out passes it as a single element of the arg vector.
-    expect(calls.map((c) => c.join(" "))).toContain("notification show herdr-beads: #13 ready for human");
+    expect(calls.map((c) => c.join(" "))).toContain("notification show herdr-frontier: #13 ready for human");
     expect(calls.some((c) => c.length === 3 && c[0] === "notification" && c[1] === "show")).toBe(true);
   });
 

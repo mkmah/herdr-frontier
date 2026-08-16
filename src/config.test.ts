@@ -1,6 +1,6 @@
 // Plugin-config tests (issue 17 — repo > user precedence). Config is two TOML
-// layers: the user's global config (`HERDR_PLUGIN_CONFIG_DIR`/`herdr-beads.toml`)
-// and a repo-root `herdr-beads.toml`; the repo layer wins per-key. Tested over
+// layers: the user's global config (`HERDR_PLUGIN_CONFIG_DIR`/`herdr-frontier.toml`)
+// and a repo-root `herdr-frontier.toml`; the repo layer wins per-key. Tested over
 // temp dirs with no plugin config present anywhere real.
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
@@ -160,10 +160,10 @@ describe("defaultUserConfigDir — where the user config lives", () => {
     }
   });
 
-  it("falls back to ~/.config/herdr/plugins/config/herdr-beads", () => {
+  it("falls back to ~/.config/herdr/plugins/config/herdr-frontier", () => {
     delete process.env[USER_CONFIG_DIR_KEY];
     expect(defaultUserConfigDir()).toBe(
-      join((process.env.HOME ?? process.env.HOMEDRIVE ?? "/"), ".config", "herdr", "plugins", "config", "herdr-beads"),
+      join((process.env.HOME ?? process.env.HOMEDRIVE ?? "/"), ".config", "herdr", "plugins", "config", "herdr-frontier"),
     );
   });
 });

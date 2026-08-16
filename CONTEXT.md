@@ -1,7 +1,14 @@
-# herdr-beads
+# herdr-frontier
 
 A `herdr` plugin (OpenTUI/Solid render layer) that orchestrates the Matt Pocock skill
 workflow across a dependency graph of issues, on a multi-tracker substrate.
+
+## Distribution & release
+
+Installed via `herdr plugin install mkmah/herdr-frontier`, which runs the `[[build]]`
+steps (preflight → production install → compile) on the user's machine; the compiled
+binary needs no Bun at runtime. Version lives only in `herdr-plugin.toml`, bumped by
+semantic-release from conventional commits. See ADR-0002.
 
 ## Language
 

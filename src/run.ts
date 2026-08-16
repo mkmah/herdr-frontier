@@ -45,7 +45,7 @@ const PRUNE_INTERVAL_MS = 60_000;
 /** The plugin's state dir: `HERDR_PLUGIN_STATE_DIR` if herdr injected it, else a
  *  repo-local fallback (so standalone `bun run src/index.tsx` still persists). */
 export function pluginStateDir(): string {
-  return process.env[STATE_DIR_KEY] ?? join(process.cwd(), ".herdr-beads", "state");
+  return process.env[STATE_DIR_KEY] ?? join(process.cwd(), ".herdr-frontier", "state");
 }
 
 /** Parse the {@link RUN_CONCURRENCY_KEY} config key into a positive integer,

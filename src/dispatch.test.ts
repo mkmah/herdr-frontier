@@ -26,7 +26,7 @@ import {
 } from "./dispatch.js";
 import type { ProfilesConfig } from "./profiles.js";
 
-const ID = ".scratch/herdr-beads/issues/12-driver.md";
+const ID = ".scratch/herdr-frontier/issues/12-driver.md";
 const BODY = "## What to build\n\nA herdr driver with an injectable runner.";
 
 const mk = (over: Partial<Issue> = {}): IssueDetail => ({
@@ -122,8 +122,8 @@ function harness(
   const { runner, calls } = recordingRunner({
     "api schema --json": SCHEMA,
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
-    "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": ok({}),
-    [`agent prompt herdr-beads-12 /implement ${ID}`]: ok({}),
+    "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": ok({}),
+    [`agent prompt herdr-frontier-12 /implement ${ID}`]: ok({}),
     ...over.fixtures,
   });
   const client = new HerdrClient({ runner });
@@ -172,8 +172,8 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.calls.map((c) => c.join(" "))).toEqual([
       "tab create --cwd /repo --label 12 — Driver --no-focus",
       "api schema --json",
-      "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5",
-      `agent prompt herdr-beads-12 /implement ${ID}`,
+      "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5",
+      `agent prompt herdr-frontier-12 /implement ${ID}`,
     ]);
   });
 
@@ -197,7 +197,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
       [mk()],
       {
         fixtures: {
-          "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5":
+          "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5":
             "__FAIL__: agent_pane_busy: not an available shell",
           "tab close wZ:t2": ok({}),
         },
@@ -415,10 +415,10 @@ describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
       }
       if (key === "api schema --json") return { code: 0, stdout: SCHEMA, stderr: "" };
       if (key === `tab create --cwd ${CWD} --label 12 — Driver --no-focus`) return { code: 0, stdout: TAB_OK, stderr: "" };
-      if (key === "agent start herdr-beads-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5") {
+      if (key === "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5") {
         return { code: 0, stdout: ok({}), stderr: "" };
       }
-      if (key === `agent prompt herdr-beads-12 /implement ${ID}`) return { code: 0, stdout: ok({}), stderr: "" };
+      if (key === `agent prompt herdr-frontier-12 /implement ${ID}`) return { code: 0, stdout: ok({}), stderr: "" };
       if (key.startsWith("notification show")) return { code: 0, stdout: ok({}), stderr: "" };
       return { code: 1, stdout: "", stderr: `no fixture for: ${key}` };
     };
