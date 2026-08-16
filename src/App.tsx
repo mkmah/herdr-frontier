@@ -522,11 +522,13 @@ export const App: Component<AppProps> = (props) => {
 
   // Key for the detail pane's content. Includes the selection, whether the body
   // read has landed (L/P/E), the pane width (for header re-truncation), and the
-  // dispatch/release feedback (so the pane remounts when either changes). A
-  // keyed <Show> remounts when the key changes — OpenTUI 0.5.1 does not repaint
-  // text or props in place, so the pane must remount when the read lands or the
-  // loaded body would never appear (same workaround as the list-row selection
-  // background and pulse).
+  // dispatch/release feedback (so the pane remounts when either changes).
+  // OpenTUI 0.5.1 does not repaint text or props in place, so the pane must
+  // remount when the read lands or the loaded body would never appear (same
+  // workaround as the list-row selection background and pulse). NOTE: the keyed
+  // <Show>'s children must take the key as an argument (see DetailPane) — a
+  // zero-arg arrow makes Solid return the same fn reference on every key change,
+  // so the pane silently never remounts.
   const detailKey = createMemo(() => {
     const s = selected();
     if (!s) return null;
@@ -746,7 +748,7 @@ export const App: Component<AppProps> = (props) => {
     >
       <scrollbox flexGrow={1} scrollY={true} paddingLeft={1} paddingRight={1}>
         <Show when={detailKey()} keyed fallback={<text fg={THEME.text.dim}> select an issue…</text>}>
-          {() => <DetailContent innerW={p.innerW} />}
+          {(_k: string) => <DetailContent innerW={p.innerW} />}
         </Show>
       </scrollbox>
     </box>
