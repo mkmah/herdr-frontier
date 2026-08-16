@@ -4,6 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # shai-hulud defense: never depend on a release younger than the cooldown,
+    # so a poisoned publish gets yanked or reported before we open a PR on it.
+    cooldown:
+      default-days: 7
     groups:
       minor-and-patch:
         applies-to: version-updates
@@ -15,6 +19,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       minor-and-patch:
         applies-to: version-updates
