@@ -11,22 +11,28 @@ concurrency:
 
 jobs:
   semantic-release:
+    if: github.repository_owner == 'mkmah'
     runs-on: ubuntu-latest
+    # RELEASE_PAT lives in the `release` environment (restricted to main), so
+    # fork PRs and non-main pushes can never reach it.
+    environment: release
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - name: semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT (contents R/W, this repo only) owned by a bypass
+          # actor — required because @semantic-release/git pushes the version
+          # commit back to the protected main branch; GITHUB_TOKEN cannot bypass.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
           GIT_AUTHOR_NAME: herdr-frontier-release
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: herdr-frontier-release
