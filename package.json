@@ -24,9 +24,9 @@
   "dependencies": {
     "@babel/core": "^8.0.1",
     "@babel/preset-typescript": "^8.0.1",
-    "@opentui/core": "^0.5.1",
-    "@opentui/solid": "^0.5.1",
+    "@opentui/core": "^0.5.2",
+    "@opentui/solid": "^0.5.2",
     "babel-preset-solid": "1.9.12",
-    "solid-js": "1.9.12"
+    "solid-js": "1.9.14"
   }
 }
