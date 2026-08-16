@@ -1,9 +1,9 @@
 // Agent profiles (CONTEXT.md: Profile) — a `{ kind, args }` agent configuration
 // bound per task-type, with the model passed raw in `args` (1:1 with herdr's
-// `--` passthrough). Manual dispatch (issue 12) uses the *minimal*
-// shape: `resolveProfile` picks the per-type entry or falls back to
-// `default_profile`. The full per-task-type config with repo > user precedence
-// lands in issue 17; the seam below is what it will extend.
+// `--` passthrough). `resolveProfile` picks the per-type entry or falls back to
+// `default_profile`. The full per-task-type config — loaded from two TOML layers
+// with repo > user precedence (issue 17) — lives in `config.ts`; this module is
+// the pure type + resolution seam it builds on.
 
 import type { Issue } from "./tracker/provider.js";
 

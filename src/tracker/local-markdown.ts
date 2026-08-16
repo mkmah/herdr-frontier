@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import {
   AlreadyClaimed,
   ClaimBusy,
+  type Comment,
   type Issue,
   type IssueDetail,
   type IssueFilter,
@@ -137,11 +138,49 @@ export class LocalMarkdownProvider implements TrackerProvider {
   async updateLabels(_id: string, _add?: string[], _remove?: string[]): Promise<Issue> {
     return unsupported("updateLabels");
   }
-  async close(_id: string, _resolution: string): Promise<Issue> {
-    return unsupported("close");
+  /**
+   * Close an Issue (issue 17): flip `Status:` to `resolved`, append the
+   * resolution under a `## Answer` section (replacing a stale one), and add a
+   * pointer to the issue in the effort's `map.md` under `## Decisions so far`
+   * (best-effort — a missing map is not an error). Written atomically under the
+   * same exclusive lock as claim/release. Throws {@link IssueNotFound}.
+   */
+  async close(id: string, resolution: string): Promise<Issue> {
+    const abs = join(this.repoRoot, ...id.split("/"));
+    const updated = await withClaimLock(abs, async () => {
+      let content: string;
+      try {
+        content = await readFile(abs, "utf8");
+      } catch {
+        throw new IssueNotFound(id);
+      }
+      const fm = parseFrontmatter(content, id);
+      const resolved = upsertAnswer(setStatusLine(content, fm.bodyStart, "resolved"), resolution);
+      await atomicWrite(abs, resolved);
+      return parseIssue(resolved, id);
+    });
+    await addMapPointer(this.repoRoot, id, resolution).catch(() => {
+      // best-effort — the issue is already closed; a failed map pointer is not
+      // a failed close
+    });
+    return updated;
   }
-  async comment(_id: string, _body: string): Promise<Issue> {
-    return unsupported("comment");
+
+  /** Append a non-terminal comment under the `## Comments` section. */
+  async comment(id: string, body: string): Promise<Issue> {
+    const abs = join(this.repoRoot, ...id.split("/"));
+    return withClaimLock(abs, async () => {
+      let content: string;
+      try {
+        content = await readFile(abs, "utf8");
+      } catch {
+        throw new IssueNotFound(id);
+      }
+      const fm = parseFrontmatter(content, id);
+      const updated = appendComment(content, body);
+      await atomicWrite(abs, updated);
+      return parseIssue(updated, id);
+    });
   }
   async addBlocking(_id: string, _blockerIds: string[]): Promise<Issue> {
     return unsupported("addBlocking");
@@ -219,6 +258,94 @@ async function atomicWrite(abs: string, content: string): Promise<void> {
   const tmp = `${abs}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, content, "utf8");
   await rename(tmp, abs);
+}
+
+/**
+ * Append (or replace) the `## Answer` section holding a resolution (issue 17).
+ * A file with no Answer section gains one at the end; an existing one has its
+ * body replaced (a re-close must not stack answers).
+ */
+function upsertAnswer(content: string, resolution: string): string {
+  const text = resolution.trim();
+  const lines = content.split("\n");
+  const idx = lines.findIndex((l) => /^##\s+Answer\s*$/.test(l));
+  if (idx < 0) {
+    return `${content.trimEnd()}\n\n## Answer\n\n${text}\n`;
+  }
+  let end = lines.length;
+  for (let i = idx + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i]!)) {
+      end = i;
+      break;
+    }
+  }
+  const before = lines.slice(0, idx).join("\n").trimEnd();
+  const after = lines.slice(end).join("\n").trimStart();
+  let out = `${before}\n## Answer\n\n${text}`;
+  if (after) out += `\n\n${after}`;
+  return out + "\n";
+}
+
+/**
+ * Append a comment under the `## Comments` section (issue 17), each with its
+ * own `### Comment N` heading so the parser can round-trip them. A file with
+ * no Comments section gains one at the end; an existing section is reused
+ * (the new comment goes after the last one, before any later `##` section).
+ */
+function appendComment(content: string, body: string): string {
+  const heading = `### Comment ${content.split("\n").filter((l) => /^###\s+Comment\b/.test(l)).length + 1}`;
+  const lines = content.split("\n");
+  const section = lines.findIndex((l) => /^##\s+Comments\s*$/.test(l));
+  if (section < 0) {
+    return `${content.trimEnd()}\n\n## Comments\n\n${heading}\n\n${body.trim()}\n`;
+  }
+  let end = lines.length;
+  for (let i = section + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i]!)) {
+      end = i;
+      break;
+    }
+  }
+  const before = lines.slice(0, end).join("\n").trimEnd();
+  const after = lines.slice(end).join("\n");
+  let out = `${before}\n\n${heading}\n\n${body.trim()}`;
+  if (after) out += `\n\n${after}`;
+  return out + "\n";
+}
+
+/**
+ * The effort's `map.md` pointer written on close (issue 17): a link to the
+ * issue under `## Decisions so far` (creating the section when missing), so a
+ * resolved issue is discoverable from the map. Best-effort by design — the
+ * caller swallows a failure (no map, unwritable path) and the close stands.
+ */
+async function addMapPointer(repoRoot: string, id: string, resolution: string): Promise<void> {
+  const parts = id.split("/"); // [".scratch", "<effort>", "issues", "<file>.md"]
+  if (parts.length < 4) return;
+  const effort = parts[1]!;
+  const file = parts[3]!;
+  const mapPath = join(repoRoot, SCRATCH_DIR, effort, "map.md");
+  let raw: string;
+  try {
+    raw = await readFile(mapPath, "utf8");
+  } catch {
+    return; // no map.md — nothing to point at
+  }
+  const link = `](issues/${file})`;
+  if (raw.includes(link)) return; // already linked
+  const num = file.replace(/\.md$/, "");
+  const gist = truncate(resolution.trim().split("\n")[0]!.trim(), 60);
+  const bullet = `- [#${num} ${gist}](issues/${file})`;
+  const re = /(^##\s+Decisions so far\s*\n)/m;
+  const next = re.test(raw)
+    ? raw.replace(re, (m) => `${m}${bullet}\n`)
+    : `${raw.trimEnd()}\n\n## Decisions so far\n\n${bullet}\n`;
+  await atomicWrite(mapPath, next);
+}
+
+/** Truncate to `n` UTF-16 units, never splitting in a way that breaks markdown. */
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : `${s.slice(0, n).trimEnd()}…`;
 }
 
 // Claim mutex constants: how long to wait for a contended `.lock` before
@@ -334,9 +461,40 @@ export function parseDetail(content: string, id: string, display?: DisplayMeta):
     assignee: fm.assignee,
     blockedBy: fm.blockedBy,
     body,
-    comments: [],
+    comments: parseComments(content, fm.bodyStart),
     ...display,
   };
+}
+
+/**
+ * Parse the `## Comments` section (issue 17) into `Comment[]`. Each `###`
+ * heading under it starts a new comment; the heading is metadata, so a
+ * comment's `body` is the text beneath it. A file without the section reads
+ * `[]`.
+ */
+function parseComments(content: string, bodyStart: number): Comment[] {
+  const lines = content.split("\n");
+  const section = lines.findIndex((l, i) => i >= bodyStart && /^##\s+Comments\s*$/.test(l));
+  if (section < 0) return [];
+  let sectionEnd = lines.length;
+  for (let i = section + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i]!)) {
+      sectionEnd = i;
+      break;
+    }
+  }
+  const comments: Comment[] = [];
+  let current: string[] | null = null;
+  for (let i = section + 1; i < sectionEnd; i++) {
+    if (/^###\s+/.test(lines[i]!)) {
+      if (current !== null) comments.push({ body: current.join("\n").trim() });
+      current = [];
+    } else if (current !== null) {
+      current.push(lines[i]!);
+    }
+  }
+  if (current !== null) comments.push({ body: current.join("\n").trim() });
+  return comments.filter((c) => c.body !== "");
 }
 
 function parseFrontmatter(content: string, id: string): Frontmatter {

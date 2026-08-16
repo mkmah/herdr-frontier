@@ -20,7 +20,9 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "nod
 import type { Issue, TrackerProvider } from "./tracker/provider.js";
 import { effortOf, issueNumber } from "./logic.js";
 import { autoSpawnable, frontier } from "./orchestrator.js";
-import type { DispatchCoordinator } from "./dispatch.js";
+import { sessionNameFor, type DispatchCoordinator } from "./dispatch.js";
+import { DEFAULT_PROFILES } from "./profiles.js";
+import type { TranscriptIngester } from "./transcript.js";
 
 // --- configuration ----------------------------------------------------------
 
@@ -77,6 +79,13 @@ export interface RunIssueState {
   paneId?: string;
   dispatchedAt?: number;
   error?: string;
+  /** The agent kind this run dispatched (the profile's `kind` — issue 17). */
+  kind?: string;
+  /** Issue 17: this member's transcript has been ingested (persisted so a
+   *  rehydrated run never writes the same result back twice). */
+  ingested?: boolean;
+  /** Issue 17: a best-effort ingest failure — surfaced, never fatal. */
+  ingestError?: string;
 }
 
 /** One run's persisted record — the crash-rehydratable state (spec:240). */
@@ -271,6 +280,9 @@ export interface RunControllerDeps {
   /** Max parallel panes per run (default {@link DEFAULT_RUN_CONCURRENCY}; the
    *  {@link RUN_CONCURRENCY_KEY} config key overrides when this is unset). */
   concurrency?: number;
+  /** Issue 17: the transcript ingester — a resolved member's finished-run
+   *  output is extracted and written back (best-effort; absent → no ingest). */
+  transcripts?: TranscriptIngester;
 }
 
 /**
@@ -410,6 +422,7 @@ export class RunController {
         if (result.ok) {
           member.status = "dispatched";
           member.paneId = result.paneId;
+          member.kind = result.kind;
           member.dispatchedAt = Date.now();
           member.error = undefined;
         } else if (result.reason === "not-dispatchable") {
@@ -420,6 +433,27 @@ export class RunController {
       } catch (e) {
         member.status = "failed";
         member.error = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    // Issue 17: ingest each member whose work the run now sees as finished —
+    // the snapshot shows `resolved`, so the ingester writes the extracted
+    // result back as a comment. Best-effort: a failed read/extract/write is
+    // recorded on the member and retried next tick; it never wedges the run.
+    if (this.deps.transcripts) {
+      for (const member of next.issues) {
+        if (member.status !== "resolved" || member.ingested) continue;
+        try {
+          await this.deps.transcripts.ingest({
+            id: member.id,
+            kind: member.kind ?? DEFAULT_PROFILES.default_profile.kind,
+            agentName: sessionNameFor(member.id),
+          });
+          member.ingested = true;
+          member.ingestError = undefined;
+        } catch (e) {
+          member.ingestError = e instanceof Error ? e.message : String(e);
+        }
       }
     }
 

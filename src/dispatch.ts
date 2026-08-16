@@ -98,12 +98,14 @@ export class ClaimRegistry {
 }
 
 /**
- * A valid herdr agent-session name for an issue (later the prompt target).
- * herdr requires: lowercase letter first, then [a-z0-9_-], ≤32 chars. The old
- * `#NN` label violated that (starts with `#`), so we derive `<effort>-<num>`
- * instead — which also disambiguates two efforts' "#09".
+ * A valid herdr agent-session name for an issue (the prompt/`agent read`
+ * target). herdr requires: lowercase letter first, then [a-z0-9_-], ≤32 chars.
+ * The old `#NN` label violated that (starts with `#`), so we derive
+ * `<effort>-<num>` instead — which also disambiguates two efforts' "#09".
+ * Exported for the run-controller's transcript ingester (issue 17), which
+ * targets the same agent `agent read` takes the name of.
  */
-function sessionNameFor(id: string): string {
+export function sessionNameFor(id: string): string {
   const num = issueNum(id).replace(/^#/, "");
   return sanitizeAgentName(`${effortOf(id)}-${num}`);
 }

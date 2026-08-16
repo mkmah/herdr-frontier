@@ -360,6 +360,143 @@ describe("LocalMarkdownProvider.claim (issue 12 — atomic mutex)", () => {
   });
 });
 
+describe("LocalMarkdownProvider.close (issue 17 — resolve + post answer)", () => {
+  const BODY = "## What to build\n\nThe driver with an injectable runner.";
+  async function seed(status: "open" | "claimed" = "open"): Promise<string> {
+    await writeIssue(
+      "herdr-beads",
+      "12-driver.md",
+      ["# 12 — Driver", "", `Status: ${status}`, "Type: task", "Labels: ready-for-agent", "Blocked by: 10, 11", "Assignee: —", "", BODY].join("\n"),
+    );
+    return ".scratch/herdr-beads/issues/12-driver.md";
+  }
+
+  it("sets Status: resolved and appends the resolution under ## Answer", async () => {
+    const id = await seed("claimed");
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const closed = await p.close(id, "Done — the driver is wired.");
+    expect(closed.status).toBe("resolved");
+
+    const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
+    expect(onDisk).toContain("Status: resolved");
+    expect(onDisk).not.toContain("Status: claimed");
+    expect(onDisk).toContain("## Answer");
+    expect(onDisk).toContain("Done — the driver is wired.");
+  });
+
+  it("preserves the body and the rest of the file exactly", async () => {
+    const id = await seed();
+    await new LocalMarkdownProvider({ repoRoot: root }).close(id, "Resolved.");
+    const detail = await new LocalMarkdownProvider({ repoRoot: root }).readIssue(id);
+    expect(detail.body).toContain(BODY);
+    expect(detail.status).toBe("resolved");
+    expect(detail.blockedBy).toEqual(["10", "11"]);
+    expect(detail.tasks).toBeUndefined();
+  });
+
+  it("replaces an existing ## Answer section instead of duplicating it", async () => {
+    await writeIssue(
+      "herdr-beads",
+      "12-driver.md",
+      ["# 12 — Driver", "", "Status: claimed", "Type: task", "Labels: ready-for-agent", "Blocked by: —", "", "## Question", "Old body.", "## Answer", "Stale answer.", ""].join("\n"),
+    );
+    const id = ".scratch/herdr-beads/issues/12-driver.md";
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.close(id, "Fresh answer.");
+    const onDisk = await readFile(issuePath("herdr-beads", "12-driver.md"), "utf8");
+    expect(onDisk).toContain("Fresh answer.");
+    expect(onDisk).not.toContain("Stale answer.");
+    expect(onDisk.match(/## Answer/g)).toHaveLength(1);
+  });
+
+  it("adds a pointer to the issue in the effort's map.md under ## Decisions so far", async () => {
+    await seed();
+    await mkdir(join(root, ".scratch", "herdr-beads"), { recursive: true });
+    await writeFile(join(root, ".scratch", "herdr-beads", "map.md"), "# Map\n\n## Decisions so far\n\n- [x] earlier\n", "utf8");
+
+    await new LocalMarkdownProvider({ repoRoot: root }).close(
+      ".scratch/herdr-beads/issues/12-driver.md",
+      "The driver is wired.",
+    );
+    const map = await readFile(join(root, ".scratch", "herdr-beads", "map.md"), "utf8");
+    expect(map).toContain("](issues/12-driver.md)");
+    expect(map).toContain("The driver is wired.");
+  });
+
+  it("is best-effort when the effort has no map.md (no throw)", async () => {
+    const id = await seed();
+    await expect(new LocalMarkdownProvider({ repoRoot: root }).close(id, "Resolved.")).resolves.toMatchObject({
+      status: "resolved",
+    });
+  });
+
+  it("writes atomically — no temp-file corpse is left behind", async () => {
+    const id = await seed();
+    await new LocalMarkdownProvider({ repoRoot: root }).close(id, "Resolved.");
+    const dir = issuePath("herdr-beads", "12-driver.md").replace(/12-driver\.md$/, "");
+    expect(await readdir(dir)).toEqual(["12-driver.md"]);
+  });
+
+  it("throws IssueNotFound for a missing id", async () => {
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await expect(p.close(".scratch/none/issues/ghost.md", "x")).rejects.toBeInstanceOf(IssueNotFound);
+  });
+});
+
+describe("LocalMarkdownProvider.comment (issue 17 — non-terminal talk)", () => {
+  async function seed(): Promise<string> {
+    await writeIssue(
+      "herdr-beads",
+      "13-comments.md",
+      ["# 13 — Comments", "", "Status: claimed", "Type: task", "Labels: ready-for-agent", "Blocked by: —", "", "Body."].join("\n"),
+    );
+    return ".scratch/herdr-beads/issues/13-comments.md";
+  }
+
+  it("appends under ## Comments and readIssue parses it back into comments", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.comment(id, "First note.");
+
+    const onDisk = await readFile(issuePath("herdr-beads", "13-comments.md"), "utf8");
+    expect(onDisk).toContain("## Comments");
+    expect(onDisk).toContain("First note.");
+
+    const detail = await p.readIssue(id);
+    expect(detail.comments).toHaveLength(1);
+    expect(detail.comments[0]!.body).toBe("First note.");
+  });
+
+  it("appends each comment with its own heading and preserves prior ones", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.comment(id, "First note.");
+    await p.comment(id, "Second note.");
+
+    const onDisk = await readFile(issuePath("herdr-beads", "13-comments.md"), "utf8");
+    expect(onDisk).toContain("First note.");
+    expect(onDisk).toContain("Second note.");
+
+    const detail = await p.readIssue(id);
+    expect(detail.comments.map((c) => c.body)).toEqual(["First note.", "Second note."]);
+  });
+
+  it("preserves the body and the status", async () => {
+    const id = await seed();
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await p.comment(id, "A note.");
+    const detail = await p.readIssue(id);
+    expect(detail.status).toBe("claimed");
+    expect(detail.body).toContain("Body.");
+    expect(detail.body).toContain("A note.");
+  });
+
+  it("throws IssueNotFound for a missing id", async () => {
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    await expect(p.comment(".scratch/none/issues/ghost.md", "x")).rejects.toBeInstanceOf(IssueNotFound);
+  });
+});
+
 describe("LocalMarkdownProvider.release (issue 12 — reopen an in-flight issue)", () => {
   const BODY = "## What to build\n\nThe driver with an injectable runner.\n\n- [ ] claim first\n- [ ] dispatch after";
   async function seed(status: "open" | "claimed" | "resolved" = "claimed"): Promise<string> {

@@ -16,6 +16,7 @@ import { AlreadyClaimed, IssueNotFound, type Issue, type IssueDetail, type Track
 import { HerdrClient, type HerdrRunner } from "./herdr-client.js";
 import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
+import { TranscriptIngester } from "./transcript.js";
 import {
   advanceRun,
   runScope,
@@ -95,10 +96,16 @@ class FakeProvider implements TrackerProvider {
   async updateLabels(id: string): Promise<Issue> {
     return this.readIssue(id);
   }
-  async close(id: string): Promise<Issue> {
-    return this.readIssue(id);
+  async close(id: string, resolution: string): Promise<Issue> {
+    this.closed.push({ id, resolution });
+    const i = this.issues.get(id);
+    if (!i) throw new IssueNotFound(id);
+    const done: IssueDetail = { ...i, status: "resolved" };
+    this.issues.set(id, done);
+    return done;
   }
-  async comment(id: string): Promise<Issue> {
+  async comment(id: string, body: string): Promise<Issue> {
+    this.commented.push({ id, body });
     return this.readIssue(id);
   }
   async addBlocking(id: string): Promise<Issue> {
@@ -112,6 +119,9 @@ class FakeProvider implements TrackerProvider {
   get(id: string): IssueDetail {
     return this.issues.get(id)!;
   }
+  /** Issue 17: what the transcript ingester wrote back via close/comment. */
+  closed: { id: string; resolution: string }[] = [];
+  commented: { id: string; body: string }[] = [];
 }
 
 const SCHEMA = JSON.stringify({ schemas: { request: { $defs: { AgentStartParams: { properties: { kind: {} } } } } } });
@@ -136,6 +146,9 @@ function herdrHarness(): { client: HerdrClient; calls: string[][] } {
     }
     if (args[0] === "agent" && args[1] === "start") return { code: 0, stdout: ok({}), stderr: "" };
     if (args[0] === "agent" && args[1] === "prompt") return { code: 0, stdout: ok({}), stderr: "" };
+    if (args[0] === "agent" && args[1] === "read") {
+      return { code: 0, stdout: ok({ read: { text: "resolved 01 — driver done" } }), stderr: "" };
+    }
     return { code: 1, stdout: "", stderr: `no fixture for: ${key}` };
   };
   return { client: new HerdrClient({ runner }), calls };
@@ -143,14 +156,20 @@ function herdrHarness(): { client: HerdrClient; calls: string[][] } {
 
 function harness(
   issues: IssueDetail[],
-  over: { concurrency?: number; storeDir?: string; provider?: FakeProvider } = {},
+  over: { concurrency?: number; storeDir?: string; provider?: FakeProvider; transcripts?: TranscriptIngester } = {},
 ) {
   const provider = over.provider ?? new FakeProvider(issues);
   const claims = new ClaimRegistry();
   const { client, calls } = herdrHarness();
   const coordinator = new DispatchCoordinator({ client, provider, profiles: DEFAULT_PROFILES, claims, cwd: "/repo" });
   const store = new FileRunStore({ dir: over.storeDir ?? join(stateDir, "runs") });
-  const controller = new RunController({ provider, coordinator, store, concurrency: over.concurrency });
+  const controller = new RunController({
+    provider,
+    coordinator,
+    store,
+    concurrency: over.concurrency,
+    transcripts: over.transcripts,
+  });
   return { provider, claims, calls, controller, store, coordinator };
 }
 
@@ -519,6 +538,81 @@ describe("RunController", () => {
     h.provider.setStatus(A, "open");
     await h.controller.stepAll();
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
+  });
+
+  // --- transcript ingestion (issue 17) --------------------------------------
+
+  it("ingests a finished member's output via the wired ingester — comment on a resolved issue", async () => {
+    const provider = new FakeProvider([mk({ id: A }), mk({ id: B, blockedBy: [A] })]);
+    const ingester = new TranscriptIngester({
+      client: herdrHarness().client,
+      provider,
+      repoRoot: "/repo",
+      config: {},
+    });
+    const h = harness([], { provider, transcripts: ingester });
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll(); // dispatch A
+    h.provider.setStatus(A, "resolved");
+    await h.controller.stepAll(); // A resolves → the run ingests its transcript
+
+    expect(h.provider.commented).toEqual([{ id: A, body: "resolved 01 — driver done" }]);
+    expect(h.provider.closed).toEqual([]);
+    const run = h.controller.load(EFFORT)!;
+    expect(memberStatus(run, A)).toBe("resolved");
+    expect(run.issues.find((m) => m.id === A)!.ingested).toBe(true); // persisted
+  });
+
+  it("records the profile kind on dispatch and never re-ingests a completed member (restart-safe)", async () => {
+    const provider = new FakeProvider([mk({ id: A })]);
+    const store = new FileRunStore({ dir: join(stateDir, "runs") });
+
+    {
+      const claims = new ClaimRegistry();
+      const { client } = herdrHarness();
+      const coordinator = new DispatchCoordinator({ client, provider, profiles: DEFAULT_PROFILES, claims, cwd: "/repo" });
+      const ingester = new TranscriptIngester({ client, provider, repoRoot: "/repo", config: {} });
+      const first = new RunController({ provider, coordinator, store, transcripts: ingester });
+      await first.start(EFFORT);
+      await first.stepAll();
+      const run = first.load(EFFORT)!;
+      expect(run.issues.find((m) => m.id === A)!.kind).toBe("opencode"); // recorded at dispatch
+      provider.setStatus(A, "resolved");
+      await first.stepAll();
+      expect(provider.commented).toHaveLength(1);
+    }
+
+    // Restart over the same store + provider: the persisted ingested flag stops
+    // a second write-back (and a second agent read).
+    const claims2 = new ClaimRegistry();
+    const { client: client2, calls: calls2 } = herdrHarness();
+    const coordinator2 = new DispatchCoordinator({ client: client2, provider, profiles: DEFAULT_PROFILES, claims: claims2, cwd: "/repo" });
+    const ingester2 = new TranscriptIngester({ client: client2, provider, repoRoot: "/repo", config: {} });
+    const second = new RunController({ provider, coordinator: coordinator2, store, transcripts: ingester2 });
+    await second.stepAll();
+    expect(provider.commented).toHaveLength(1);
+    expect(calls2.some((c) => c[0] === "agent" && c[1] === "read")).toBe(false);
+  });
+
+  it("ingestion failure is best-effort — the run completes, the member records the error", async () => {
+    const provider = new FakeProvider([mk({ id: A })]);
+    const failingClient = new HerdrClient({
+      runner: async () => ({ code: 1, stdout: "", stderr: "agent read boom" }),
+    });
+    const ingester = new TranscriptIngester({ client: failingClient, provider, repoRoot: "/repo", config: {} });
+    const h = harness([], { provider, transcripts: ingester });
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll();
+    provider.setStatus(A, "resolved");
+    await h.controller.stepAll(); // the ingest read throws — swallowed
+
+    const run = h.controller.load(EFFORT)!;
+    const member = run.issues.find((m) => m.id === A)!;
+    expect(run.status).toBe("completed"); // a broken ingest never wedges the run
+    expect(member.ingested).toBeFalsy(); // never marked ingested → retryable
+    expect(member.ingestError).toMatch(/agent read boom/);
+    expect(provider.commented).toEqual([]);
+    expect(provider.closed).toEqual([]);
   });
 });
 
