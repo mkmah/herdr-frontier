@@ -54,9 +54,10 @@ bun run policy:check
 2. Keep the change focused.
 3. Open a pull request. Reference the `.scratch/<feature>/` issue it resolves.
 4. Wait for CI. Fix failures before merge.
-5. Merge with a [conventional commit](https://www.conventionalcommits.org/)
-   message (`feat:`, `fix:`, `perf:`, `breaking:`). semantic-release derives
-   the next version and the changelog from them.
+5. Add a changeset (`bun run changeset`) declaring the bump (patch/minor/major)
+   and writing the release note. Versions and the changelog are derived from
+   changesets, not commit messages. Conventional commit messages are still the
+   house style — they just no longer drive versioning.
 
 ## Adding a tracker adapter
 

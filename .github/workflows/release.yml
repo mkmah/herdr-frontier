@@ -1,40 +1,73 @@
-name: release
+name: Release
 
+# TanStack/ai model (ADR 0003): a push to a release branch runs tests, then
+# changesets either opens/updates the "ci: Version Packages" PR (pending
+# changesets exist) or — once that PR merged — runs the publish command.
+# Merging the version PR is the release act; nothing ever pushes to main
+# directly, so the ephemeral GITHUB_TOKEN is the only credential.
 on:
-  workflow_dispatch:
-
-permissions: {}
+  push:
+    branches: [main, alpha, beta, rc]
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  semantic-release:
+  test:
+    name: Test
     if: github.repository_owner == 'mkmah'
     runs-on: ubuntu-latest
-    # RELEASE_PAT lives in the `release` environment (restricted to main), so
-    # fork PRs and non-main pushes can never reach it.
-    environment: release
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - name: semantic-release
+      - name: Test & typecheck
         env:
-          # Fine-grained PAT (contents R/W, this repo only) owned by a bypass
-          # actor — required because @semantic-release/git pushes the version
-          # commit back to the protected main branch; GITHUB_TOKEN cannot bypass.
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
-          GIT_AUTHOR_NAME: herdr-frontier-release
-          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: herdr-frontier-release
-          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-        run: bun x semantic-release
+          HERDR_BIN_PATH: /does-not-exist/herdr
+          HERDR_SOCKET_PATH: ""
+        run: |
+          bun test
+          bunx tsc --noEmit
+
+  release:
+    name: Release
+    needs: test
+    if: github.repository_owner == 'mkmah'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tag + GitHub Release via `bun run release`
+      pull-requests: write # the "ci: Version Packages" PR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # changesets/action pushes the version branch with the checkout
+          # credential; the credential is the ephemeral GITHUB_TOKEN (TanStack
+          # model). Every other workflow in this repo persists no credentials.
+          persist-credentials: true
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Run Changesets (version or publish)
+        uses: changesets/action@72b60a2c449090fd1871c5578768a32a76011a9d # v2.1.0
+        with:
+          version: bun run version
+          publish: bun run release
+          commit: 'ci: Version Packages'
+          title: 'ci: Version Packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

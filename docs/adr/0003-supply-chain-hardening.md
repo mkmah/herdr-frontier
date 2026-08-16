@@ -14,41 +14,51 @@ dependency steals workflow credentials; workflow template injection) and lock
   via PR only, required status checks (`test (linux)`, `test (macos)`,
   `typecheck (linux)`, `zizmor`) with strict up-to-date policy. The only bypass
   actor is mkmah.
-- **`@semantic-release/git` keeps pushing the version commit** to `main`.
-  `GITHUB_TOKEN` can never bypass branch protection, so the release job
-  authenticates with a fine-grained PAT (`contents` R/W, this repo only) owned
-  by the bypass actor, stored as `RELEASE_PAT`.
-- **The PAT lives in a `release` environment** whose deployment-branch policy
-  is `main` only. The release workflow is `workflow_dispatch` only, so the
-  secret is unreachable from fork PRs (never receive secrets), branch pushes
-  (environment policy), or any automatic trigger.
-- **Every checkout sets `persist-credentials: false`** except none — release
-  authenticates via `GH_TOKEN` env, not persisted git credentials, so a
-  compromised dependency cannot exfiltrate a usable credential from disk.
+- **Releases use Changesets, not semantic-release** (supersedes the PAT design
+  first recorded here). A PR ships with a `.changeset/*.md` declaring its bump
+  and release note. On merge, `changesets/action` opens a single "ci: Version
+  Packages" PR; **merging that PR is the release act**. On the resulting push,
+  the action runs `bun run release`, which tags `vX.Y.Z` and creates the GitHub
+  Release from the CHANGELOG section via the API.
+- **No long-lived release credential exists.** CI never pushes to `main` — the
+  version bump arrives by PR — so the ephemeral `GITHUB_TOKEN` is enough and
+  the `release` environment / `RELEASE_PAT` / bypass-for-release design was
+  dropped.
+- **`persist-credentials: false`** on every checkout except the release job's,
+  where changesets pushes the version branch with the (ephemeral
+  `GITHUB_TOKEN`) checkout credential — the TanStack trade-off.
 - **zizmor scans all workflows** on every push and PR (pinned-SHA actions
   only; template injection and excessive permissions are findings).
-- **Least-privilege permissions everywhere**: `permissions: {}` or
-  `contents: read` top-level, job-level escalation only where needed
-  (release: `contents: write`). Issue/PR comment scopes were dropped when the
-  plugin's comments were disabled.
+- **Least-privilege permissions everywhere**: `contents: read` (or `{}`)
+  top-level, job-level escalation only where needed (release: `contents:
+  write` + `pull-requests: write`). No `id-token: write` — there is no npm
+  publishing, so no OIDC.
+- **Dependabot runs with a 7-day cooldown** (both ecosystems): a poisoned
+  publish gets yanked or reported before we open an update PR on it.
+- **Prerelease channels** (`alpha`/`beta`/`rc` branches) trigger the same
+  release workflow; `changeset pre enter <channel>` produces
+  `0.x.y-channel.N` versions, which `scripts/release.ts` marks as prereleases.
+  The ruleset covers these branches too.
 
 ## Key trade-offs
 
-- **PAT over changesets/PR-bumps.** TanStack lands version bumps via a bot PR
-  (changesets) and needs no credential at all. We keep semantic-release's
-  zero-touch conventional-commit inference instead; the cost is one long-lived
-  secret, contained by environment scoping + dispatch-only triggering +
-  fine-grained scope (worst case: content write to this one repo, which is
-  recoverable from git history).
-- **Bypass actor over no-bypass.** Requiring PRs with no bypass would break
-  the release push; alternatives (GitHub App, deploy key) add moving parts
-  without removing a secret from the equation for a solo repo.
+- **Changesets over semantic-release.** Release intent is declared at PR time
+  by the author instead of parsed from commit messages. Cost: one extra file
+  per PR; benefit: no write credential, no commit-message convention to
+  enforce, and human-readable release notes.
+- **The Version Packages PR carries no CI checks** — PRs opened with
+  `GITHUB_TOKEN` trigger no `pull_request` workflows, so its required checks
+  never appear and it is merged by the owner via the ruleset bypass. Acceptable
+  because its content is machine-generated (version fields + CHANGELOG) from
+  already-CI-passing commits.
+- **Bypass actor over no-bypass.** The owner needs the bypass for the Version
+  Packages PR; everything else merges through gated PRs.
 
 ## Consequences
 
-- Direct pushes to `main` by the owner still work (bypass) but show as
-  bypassed in the audit log; everything else merges through PRs gated on CI.
-- Before the first release after this ADR, `RELEASE_PAT` must exist in the
-  `release` environment or the dispatch fails fast at semantic-release.
+- Before merging any PR that changes behavior, add a changeset — otherwise the
+  change ships silently with the next version bump.
+- Releasing = merge the "ci: Version Packages" PR; nothing else to click. The
+  publish run creates the tag + GitHub Release.
 - Adding a new workflow that writes to `main` requires rethinking the bypass
   design; adding a new required check means updating the ruleset.

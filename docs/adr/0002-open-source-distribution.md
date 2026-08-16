@@ -18,11 +18,12 @@ decide how it ships: a self-contained compiled binary, a version that lives only
   `bun build --compile` fails at runtime (`preload not found "@opentui/solid/preload"`),
   because `@opentui/solid`'s preload is a runtime Bun transpiler. `scripts/build.ts` instead
   passes `createSolidTransformPlugin()` from `@opentui/solid/bun-plugin` to `Bun.build({ compile: true })`.
-- **Version lives only in `herdr-plugin.toml`.** package.json stays `private` with no version
-  field — there is no npm package. semantic-release derives the next version from conventional
-  commits, `scripts/prepare-release.ts` writes it into the manifest, and `@semantic-release/git`
-  commits it with `[skip ci]`. Releases are GitHub Releases with notes only, no binary assets
-  (per-OS binaries are built by each user's install).
+- **Version lives only in `herdr-plugin.toml`.** package.json stays `private` —
+  there is no npm package. Changesets bump the package.json version, the
+  `version` script syncs it into the manifest, and releases are GitHub Releases
+  with notes only, no binary assets (per-OS binaries are built by each user's
+  install). *(Amended by ADR-0003: release automation moved from
+  semantic-release to changesets.)*
 - **License MIT**, copyright mkmah, 2026.
 
 ## Key trade-offs
