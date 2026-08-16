@@ -16,14 +16,23 @@ if (!version) {
   process.exit(1);
 }
 
-const changelog = readFileSync(join(import.meta.dir, "..", "CHANGELOG.md"), "utf8");
-const start = changelog.indexOf(`## ${version}`);
-if (start === -1) {
-  console.error(`CHANGELOG.md has no "## ${version}" section`);
-  process.exit(1);
+const changelogPath = join(import.meta.dir, "..", "CHANGELOG.md");
+let body: string;
+try {
+  const changelog = readFileSync(changelogPath, "utf8");
+  const start = changelog.indexOf(`## ${version}`);
+  if (start === -1) {
+    // A push with no pending changesets that isn't a Version Packages merge
+    // (e.g. docs-only, no changeset added) — nothing to publish.
+    console.log(`CHANGELOG.md has no "## ${version}" section — nothing to do`);
+    process.exit(0);
+  }
+  const next = changelog.indexOf("\n## ", start + 1);
+  body = changelog.slice(start + `## ${version}`.length, next === -1 ? undefined : next).trim();
+} catch {
+  console.log("no CHANGELOG.md yet — nothing to do");
+  process.exit(0);
 }
-const next = changelog.indexOf("\n## ", start + 1);
-const body = changelog.slice(start + `## ${version}`.length, next === -1 ? undefined : next).trim();
 
 const tag = `v${version}`;
 const prerelease = version.includes("-");

@@ -1,10 +1,11 @@
 name: Release
 
 # TanStack/ai model (ADR 0003): a push to a release branch runs tests, then
-# changesets either opens/updates the "ci: Version Packages" PR (pending
-# changesets exist) or — once that PR merged — runs the publish command.
-# Merging the version PR is the release act; nothing ever pushes to main
-# directly, so the ephemeral GITHUB_TOKEN is the only credential.
+# changesets opens/updates the "ci: Version Packages" PR while pending
+# changesets exist. Merging that PR is the release act: the merge push has no
+# changesets left, so the publish step runs — scripts/release.ts tags vX.Y.Z
+# and creates the GitHub Release from the CHANGELOG via the API. Nothing ever
+# pushes to main directly; the ephemeral GITHUB_TOKEN is the only credential.
 on:
   push:
     branches: [main, alpha, beta, rc]
@@ -46,7 +47,7 @@ jobs:
     if: github.repository_owner == 'mkmah'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # tag + GitHub Release via `bun run release`
+      contents: write # tag + GitHub Release in scripts/release.ts
       pull-requests: write # the "ci: Version Packages" PR
     steps:
       - name: Checkout
@@ -54,20 +55,30 @@ jobs:
         with:
           fetch-depth: 0
           # changesets/action pushes the version branch with the checkout
-          # credential; the credential is the ephemeral GITHUB_TOKEN (TanStack
-          # model). Every other workflow in this repo persists no credentials.
+          # credential; that credential is the ephemeral GITHUB_TOKEN
+          # (TanStack model). No other workflow in this repo persists
+          # credentials.
           persist-credentials: true
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - name: Run Changesets (version or publish)
+      - name: Run Changesets (version PR) or publish
+        id: changesets
         uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         with:
-          version: bun run version
-          publish: bun run release
-          commit: 'ci: Version Packages'
-          title: 'ci: Version Packages'
+          # v2 renamed inputs; the action is used only for the version PR —
+          # publishing is our own step below (the v2 publish path requires
+          # CHANGESETS_OUTPUT plumbing meant for npm packages).
+          version-script: bun run version
+          commit-message: 'ci: Version Packages'
+          pr-title: 'ci: Version Packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tag & GitHub Release
+        # No changesets on this push = the Version Packages PR merged.
+        if: steps.changesets.outputs.has-changesets == 'false'
+        run: bun run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
