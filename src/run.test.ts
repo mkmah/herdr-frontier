@@ -541,6 +541,28 @@ describe("RunController", () => {
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
   });
 
+  // --- running-runs accessor (issue 02) -------------------------------------
+
+  it("runningRuns is zero for an empty store", () => {
+    const h = harness([]);
+    expect(h.controller.runningRuns).toBe(0);
+  });
+
+  it("runningRuns counts only the currently running runs — stopped and completed never count", async () => {
+    const h = harness([mk({ id: A })]);
+    await h.controller.start(EFFORT);
+    expect(h.controller.runningRuns).toBe(1);
+
+    // A mixed store: terminal records sit beside the running one.
+    h.store.save({ ...emptyRun("done"), status: "completed", completedAt: NOW });
+    h.store.save({ ...emptyRun("stopped"), status: "stopped" });
+    expect(h.controller.runningRuns).toBe(1);
+
+    // Once the running run is stopped too, nothing counts.
+    await h.controller.stop(EFFORT);
+    expect(h.controller.runningRuns).toBe(0);
+  });
+
   // --- transcript ingestion (issue 17) --------------------------------------
 
   it("ingests a finished member's output via the wired ingester — comment on a resolved issue", async () => {

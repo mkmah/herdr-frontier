@@ -306,6 +306,20 @@ export class RunController {
     return this.deps.store.load(root);
   }
 
+  /** The store's currently running runs — the subset every run-wide verb
+   *  (stop-all / step-all) works on, and the confirmation gate's skip fact. */
+  private running(): RunState[] {
+    return this.deps.store.all().filter((r) => r.status === "running");
+  }
+
+  /** How many runs are currently running (confirmation gate 02 — run-stop's
+   *  structural-skip fact): zero for an empty store, and only `running` runs
+   *  count — stopped and completed ones never do. Read-only, against the
+   *  controller's store. */
+  get runningRuns(): number {
+    return this.running().length;
+  }
+
   /**
    * Start a run bound to a run-root: snapshot its graph and persist it. While
    * a run is already running this is idempotent (returns it) — a rehydrated
@@ -342,11 +356,9 @@ export class RunController {
    *  stop-all is the reliable "end the auto-dispatch" control. */
   async stopAll(): Promise<number> {
     let stopped = 0;
-    for (const run of this.deps.store.all()) {
-      if (run.status === "running") {
-        await this.stop(run.root);
-        stopped += 1;
-      }
+    for (const run of this.running()) {
+      await this.stop(run.root);
+      stopped += 1;
     }
     return stopped;
   }
@@ -358,7 +370,7 @@ export class RunController {
    *  did nothing". Release is best-effort per pane — a stuck pane is an orphan
    *  the user can close, but it never blocks the other releases or the stop. */
   async stopAllAndRelease(): Promise<number> {
-    const runs = this.deps.store.all().filter((r) => r.status === "running");
+    const runs = this.running();
     for (const run of runs) {
       await this.stop(run.root);
       for (const member of run.issues) {
@@ -382,7 +394,7 @@ export class RunController {
    * the poll. Returns the number of running runs stepped.
    */
   async stepAll(fresh?: Issue[]): Promise<number> {
-    const runs = this.deps.store.all().filter((r) => r.status === "running");
+    const runs = this.running();
     if (runs.length === 0) return 0;
     if (Date.now() - this.lastPruneAt > PRUNE_INTERVAL_MS) {
       this.deps.store.prune();
