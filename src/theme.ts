@@ -7,10 +7,10 @@
 // blocked red, frontier cyan, human orange. There is no central OpenTUI theme
 // object (research 02), so this module IS our theme.
 
-import { TextAttributes } from "@opentui/core";
+import { RGBA, TextAttributes } from "@opentui/core";
 import type { ListState } from "./display.js";
 
-const surface = { bg: "#171b26", panel: "#1e2433", onAccent: "#11151c" };
+const surface = { bg: "#171b26", panel: "#1e2433", dim: RGBA.fromValues(0, 0, 0, 0.6), onAccent: "#11151c" };
 const border = { focused: "#7aa2f7", idle: "#3b4252" };
 const state = {
   done: "#06d6a0", // green — resolved / complete

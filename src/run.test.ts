@@ -563,6 +563,36 @@ describe("RunController", () => {
     expect(h.controller.runningRuns).toBe(0);
   });
 
+  // The gate's live copy facts (issue 05): run-start names the controller's
+  // effective concurrency cap, run-stop the store's in-flight tally.
+  it("concurrency reflects the deps override, then the env key, then the default", () => {
+    expect(harness([], { concurrency: 5 }).controller.concurrency).toBe(5);
+    process.env[RUN_CONCURRENCY_KEY] = "2";
+    try {
+      expect(harness([]).controller.concurrency).toBe(2);
+      expect(harness([], { concurrency: 7 }).controller.concurrency).toBe(7); // deps beat env
+    } finally {
+      delete process.env[RUN_CONCURRENCY_KEY];
+    }
+    expect(harness([]).controller.concurrency).toBe(DEFAULT_RUN_CONCURRENCY);
+  });
+
+  it("inflightCount totals the dispatched members across running runs only", async () => {
+    const h = harness([mk({ id: A }), mk({ id: B }), mk({ id: C })], { concurrency: 3 });
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll(); // dispatch A + B + C
+    expect(h.controller.inflightCount).toBe(3);
+
+    // A resolved member leaves the in-flight tally.
+    h.provider.setStatus(A, "resolved");
+    await h.controller.stepAll();
+    expect(h.controller.inflightCount).toBe(2);
+
+    // A terminal run (stopped) never counts — it releases nothing in-flight.
+    await h.controller.stop(EFFORT);
+    expect(h.controller.inflightCount).toBe(0);
+  });
+
   // --- transcript ingestion (issue 17) --------------------------------------
 
   it("ingests a finished member's output via the wired ingester — comment on a resolved issue", async () => {

@@ -320,6 +320,20 @@ export class RunController {
     return this.running().length;
   }
 
+  /** The per-run concurrency cap a run started through this controller would
+   *  use (the run-start dialog's copy names it): the deps override, else the
+   *  {@link RUN_CONCURRENCY_KEY} env key, else the default. Read-only. */
+  get concurrency(): number {
+    return this.deps.concurrency ?? concurrencyFromEnv() ?? DEFAULT_RUN_CONCURRENCY;
+  }
+
+  /** The total in-flight (dispatched) member count across all running runs —
+   *  the run-stop dialog's copy names it. Read-only, against the store;
+   *  stopped and completed runs never count (they release nothing). */
+  get inflightCount(): number {
+    return this.running().reduce((n, r) => n + r.issues.filter((m) => m.status === "dispatched").length, 0);
+  }
+
   /**
    * Start a run bound to a run-root: snapshot its graph and persist it. While
    * a run is already running this is idempotent (returns it) — a rehydrated
@@ -333,7 +347,9 @@ export class RunController {
       id: runIdFor(root),
       root,
       status: "running",
-      concurrency: this.deps.concurrency ?? concurrencyFromEnv() ?? DEFAULT_RUN_CONCURRENCY,
+      // The controller's effective cap — the same read-only source the
+      // run-start confirmation dialog's copy names, so the two can't drift.
+      concurrency: this.concurrency,
       startedAt: Date.now(),
       issues: [],
     };

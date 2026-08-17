@@ -27,6 +27,7 @@ import {
 } from "./logic.js";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import type { RunController } from "./run.js";
+import type { ConfirmDialog } from "./confirm.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => ({
   id: ".scratch/e/issues/01-x.md",
@@ -501,6 +502,72 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const frame = setup.captureCharFrame();
     expect(frame).toContain("…");
     expect(frame).not.toContain("far too long");
+    setup.renderer.destroy();
+  });
+
+  // Confirmation-gate 05 (Seam 4): the one-shot renderer paints the confirmation
+  // overlay over the shell from the initialModal seam — the rulebook's shape
+  // (title, context line, body) plus the `[ Cancel  Confirm ]` row with Confirm
+  // pre-focused (the `▶` caret marks the focused button in the captured frame).
+  // The dim cover is translucent, so the shell stays legible under it (the
+  // overlay layers above, not in place of, the two panes). Keyboard interaction
+  // (move/confirm/cancel + the dead-key swallow) and the policy/structure skips
+  // live in the pure rulebook tests (Seam 1), not here — the renderer is
+  // one-shot.
+  it("paints the confirmation overlay over the shell via the initialModal seam", async () => {
+    const issue = mk({
+      id: ".scratch/herdr-frontier/issues/05-confirm.md",
+      title: "05 — Confirm rulebook",
+    });
+    const detail: IssueDetail = { ...issue, body: "", comments: [] };
+    const modal: ConfirmDialog = {
+      trigger: "dispatch",
+      title: "Dispatch #05?",
+      context: "#05 — Confirm rulebook",
+      body: "Claims #05 and starts an agent in a new pane — work begins now.",
+      cancelLabel: "Cancel",
+      confirmLabel: "Confirm",
+      focusedButton: "confirm",
+    };
+    const setup = await testRender(
+      () => (
+        <App
+          provider={noopProvider}
+          initialIssues={[issue]}
+          initialDetail={detail}
+          initialModal={modal}
+        />
+      ),
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the dim cover is translucent — the two-pane shell stays legible under the
+    // overlay (it layers above, not in place of, the panes)
+    expect(frame).toContain("◆ herdr-frontier");
+    expect(frame).toContain("Issues");
+    // the overlay's shape: title, context line, then the body
+    expect(frame).toContain("Dispatch #05?");
+    expect(frame).toContain("#05 — Confirm rulebook");
+    expect(frame).toContain("Claims #05");
+    expect(frame).toContain("work begins now.");
+    // both buttons, Confirm pre-focused — the ▶ caret marks the focused button
+    expect(frame).toContain("[ Cancel ]");
+    expect(frame).toContain("▶ Confirm");
+    setup.renderer.destroy();
+  });
+
+  // Regression for the same seam: no modal prop → no overlay. A plain shell
+  // render must not sprout a stray dialog (the modal key is null).
+  it("paints no overlay when no dialog is open", async () => {
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[mk()]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("▶ Confirm");
+    expect(frame).not.toContain("Dispatch #");
     setup.renderer.destroy();
   });
 });

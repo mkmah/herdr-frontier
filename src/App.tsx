@@ -7,7 +7,10 @@
 // Issue's labels, blocked-by, agent, tasks, age, and body.
 //
 // Keys:  j/k (↑/↓) move · Tab swap the focused pane (border reflects focus)
-//        r reload · q quit
+//        Enter/x/s/S gate behind a confirmation dialog · r reload · q quit
+//        (Esc no longer quits — inside a dialog Esc/q cancel, outside it is a
+//        no-op; the gate at each verb's top is the single entry to every
+//        Confirmable action, so keyboard and mouse can never bypass it.)
 //
 // One cross-view theme module (./theme.ts) drives the header, list, detail, and
 // footer — change a token and the whole app re-themes. All presentation logic
@@ -20,8 +23,9 @@ import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import type { AgentStatus } from "./herdr-client.js";
-import type { RunController } from "./run.js";
-import type { ConfirmPolicy } from "./confirm.js";
+import { DEFAULT_RUN_CONCURRENCY, type RunController } from "./run.js";
+import { confirmationFor, modalKeyAction, type ConfirmationCtx, type ConfirmationTrigger } from "./confirm.js";
+import type { ConfirmButton, ConfirmDialog, ConfirmPolicy } from "./confirm.js";
 import {
   blockerResolved,
   buildRows,
@@ -69,6 +73,10 @@ export interface AppProps {
   initialDetail?: IssueDetail;
   /** Initial view (test seam); production defaults to the primary list. */
   initialView?: AppView;
+  /** The confirmation dialog already open on first render (test seam — paints
+   *  the overlay over the two-pane shell, mirroring initialIssues/initialDetail);
+   *  production starts with no dialog open. */
+  initialModal?: ConfirmDialog;
   /** Called on q. Defaults to `renderer.destroy()` (restores the terminal); overridable for tests. */
   onQuit?: () => void;
   /** Manual single-issue dispatch (issue 12). Production builds one in index.tsx. */
@@ -94,6 +102,12 @@ type ReleaseUi =
   | { status: "running"; issueId: string }
   | { status: "ok"; issueId: string; tabClosed: boolean }
   | { status: "error"; issueId: string; message: string };
+
+/** The confirmation overlay's live state: the dialog to paint + which button
+ *  is focused. Confirm is always pre-focused (the rulebook's focusedButton);
+ *  the keyboard moves focus between the two ConfirmButtons, and Enter fires
+ *  whichever is focused. */
+type ModalState = { dialog: ConfirmDialog; focus: ConfirmButton };
 
 /** Chip background for a canonical label — wayfinder → brand, else the triage palette. */
 function Chip(props: { label: string }) {
@@ -168,6 +182,14 @@ export const App: Component<AppProps> = (props) => {
   const [view, setView] = createSignal<AppView>(props.initialView ?? "list");
   // The tree view's cursor over the flattened forward-forest rows.
   const [treeCursor, setTreeCursor] = createSignal(0);
+  // The confirmation overlay (confirmation-gate 05): null = no dialog; else the
+  // dialog to paint plus which button is focused. Confirm is always pre-focused
+  // (the rulebook's focusedButton); `initialModal` seeds it for the render-smoke
+  // seam. State changes here never move selection or the pane focus — cancel
+  // costs nothing.
+  const [modal, setModal] = createSignal<ModalState | null>(
+    props.initialModal ? { dialog: props.initialModal, focus: "confirm" } : null,
+  );
   // Scrollbox refs — auto-scroll the cursor row into view: the list pane's on
   // cursor movement, the tree's on tree-cursor movement (issue 15 / 16).
   let listScroll: any = null;
@@ -319,7 +341,7 @@ export const App: Component<AppProps> = (props) => {
   // `{id}` → `agent start` from the profile. The coordinator owns the shared
   // claim mutex; we only render its outcome and reflect the claim in the list so
   // the row flips to "running" without a full reload.
-  async function doDispatch() {
+  async function executeDispatch() {
     const sel = selected();
     if (!sel || !props.dispatchCoordinator) return;
     setDispatchState({ status: "running", issueId: sel.id });
@@ -351,7 +373,7 @@ export const App: Component<AppProps> = (props) => {
   // session spawned for it. The provider release is authoritative; we optimistically
   // reflect the reopen in the list so the row flips back without a full reload
   // (which would reset the cursor). The background poll reconciles anything stale.
-  async function doRelease() {
+  async function executeRelease() {
     const sel = selected();
     if (!sel || !props.dispatchCoordinator) return;
     setReleaseState({ status: "running", issueId: sel.id });
@@ -379,7 +401,7 @@ export const App: Component<AppProps> = (props) => {
   // separate key: the poll steps ALL stored runs, so stop-all is the reliable
   // end to the auto-dispatch, and releasing the in-flight work is what makes
   // "stop" actually feel like it stopped.
-  async function startRun() {
+  async function executeStart() {
     const sel = selected();
     if (!sel || !props.runController) return;
     try {
@@ -389,13 +411,99 @@ export const App: Component<AppProps> = (props) => {
       // surfaced next poll — start failures are non-fatal
     }
   }
-  async function stopRun() {
+  async function executeStop() {
     if (!props.runController) return;
     try {
       await props.runController.stopAllAndRelease();
       setRunVersion((v) => v + 1);
     } catch {
       // surfaced next poll — stop failures are non-fatal
+    }
+  }
+
+  // --- the confirmation gate (confirmation-gate 05) --------------------------
+  // Every Confirmable verb asks the pure rulebook (./confirm.ts) *before* it
+  // runs. `gated(trigger, body)` opens the trigger's dialog, or runs `body`
+  // directly when the `[confirm]` policy suppresses the trigger or the action
+  // is a structural no-op — exactly as the verb behaved before the gate. The
+  // gate lives at the top of each verb (the four `do*`/`start*`/`stop*` entries
+  // below are the verbs' sole entry points), so Enter *and* the mouse
+  // double-click (both views) ride the same path and can never bypass each
+  // other.
+
+  const confirmPolicy = () => props.confirmPolicy ?? {};
+
+  /** The live facts + subjects the rulebook decides on (issue 05): selection,
+   *  dispatcher/controller presence, dispatchability, run tallies, and the
+   *  ids/titles/roots the dialog copy names. */
+  function gateCtx(): ConfirmationCtx {
+    const sel = selected();
+    const runRoot = sel ? effortOf(sel.id) : "";
+    const run = sel && props.runController ? props.runController.load(runRoot) : null;
+    const outcome = sel ? dispatch(sel) : null;
+    return {
+      hasSelection: !!sel,
+      hasCoordinator: !!props.dispatchCoordinator,
+      hasController: !!props.runController,
+      // dispatchable: the selected issue's dispatch outcome is implement/wayfinder
+      // and it is still open — a claimed/resolved/wontfix issue can't dispatch.
+      dispatchable:
+        !!sel && sel.status === "open" && (outcome?.kind === "implement" || outcome?.kind === "wayfinder"),
+      runningRuns: props.runController?.runningRuns ?? 0,
+      issueId: sel?.id ?? "",
+      issueTitle: sel?.title ?? "",
+      runRoot,
+      // A stored run pins its own cap; a not-yet-started run uses the
+      // controller's effective concurrency (deps override → env key → default).
+      concurrency: run?.concurrency ?? props.runController?.concurrency ?? DEFAULT_RUN_CONCURRENCY,
+      inflight: props.runController?.inflightCount ?? 0,
+    };
+  }
+
+  /** Run one Confirmable trigger through the gate: open its dialog, or — when
+   *  the policy suppresses it / it's a structural no-op — run the verb's
+   *  unchanged body. This single path is what Enter and the mouse double-click
+   *  both enter, so the two can never diverge. */
+  function gated(trigger: ConfirmationTrigger, body: () => void) {
+    const gate = confirmationFor(trigger, confirmPolicy(), gateCtx());
+    if (gate) { openModal(gate); return; }
+    body();
+  }
+
+  /** Open the gate's dialog — Confirm is always pre-focused (the rulebook
+   *  locks it; there is no other first-focus). */
+  function openModal(dialog: ConfirmDialog) {
+    setModal({ dialog, focus: dialog.focusedButton });
+  }
+
+  // The four Confirmable verbs, gated: the keyboard handler, the list/tree
+  // double-click, and the modal's confirm all land here or on the body below.
+  function doDispatch() { gated("dispatch", () => void executeDispatch()); }
+  function doRelease() { gated("release", () => void executeRelease()); }
+  function startRun() { gated("run-start", () => void executeStart()); }
+  function stopRun() { gated("run-stop", () => void executeStop()); }
+
+  /** Confirm the open dialog: run the pending verb's unchanged body. The ~2s
+   *  poll has kept reconciling live state behind the dialog, so a state change
+   *  under it just makes the confirmed action a no-op, surfaced through the
+   *  existing detail-pane feedback (never a second dialog). */
+  function confirmModal() {
+    const m = modal();
+    if (!m) return;
+    setModal(null);
+    switch (m.dialog.trigger) {
+      case "dispatch":
+        void executeDispatch();
+        break;
+      case "release":
+        void executeRelease();
+        break;
+      case "run-start":
+        void executeStart();
+        break;
+      case "run-stop":
+        void executeStop();
+        break;
     }
   }
 
@@ -443,6 +551,34 @@ export const App: Component<AppProps> = (props) => {
   }
 
   useKeyboard((key) => {
+    const m = modal();
+    if (m) {
+      // While a dialog is open every key routes here and only here — the dead
+      // key swallow: any key the modal doesn't map does nothing, so no cursor
+      // motion, view toggle, reload, quit, or Confirmable action can fire
+      // behind the overlay. Only the move/confirm/cancel keys reach the shell.
+      switch (modalKeyAction(key)) {
+        case "left":
+          setModal({ dialog: m.dialog, focus: "cancel" });
+          break;
+        case "right":
+          setModal({ dialog: m.dialog, focus: "confirm" });
+          break;
+        case "confirm":
+          // Enter activates the *focused* button — Confirm pre-focused, but a
+          // focused Cancel makes Enter cancel (and Esc/q always cancel).
+          if (m.focus === "cancel") setModal(null);
+          else confirmModal();
+          break;
+        case "cancel":
+          // Esc/q — cancel, never quit: appKeyAction is unreachable here.
+          setModal(null);
+          break;
+        case null:
+          break;
+      }
+      return;
+    }
     switch (appKeyAction(key)) {
       case "quit":
         (props.onQuit ?? (() => renderer.destroy()))();
@@ -545,6 +681,15 @@ export const App: Component<AppProps> = (props) => {
     const rs = releaseState();
     const releasePart = rs.status === "idle" ? "I" : rs.status === "running" ? "R" : rs.status === "ok" ? `ok:${rs.tabClosed ? 1 : 0}` : "E";
     return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerWFor()}|${dispatchPart}|${releasePart}|${runVersion()}`;
+  });
+
+  // The confirmation overlay's keyed <Show> key — includes which dialog, the
+  // focused button, and the dimensions, so every focus move / open / resize
+  // remounts the overlay (OpenTUI 0.5.1 doesn't repaint in place — the shell's
+  // established workaround, same as the detail pane and row selection).
+  const modalKey = createMemo(() => {
+    const m = modal();
+    return m ? `${m.dialog.trigger}|${m.focus}|${dims().width}x${dims().height}` : null;
   });
 
   const openCount = () => shown().filter((i) => i.status === "open").length;
@@ -859,6 +1004,90 @@ export const App: Component<AppProps> = (props) => {
     </box>
   );
 
+  // --- confirmation overlay (confirmation-gate 05) --------------------------
+  // The centered modal painted over the whole shell while a dialog is open.
+  // The dim cover is absolute + zIndex 10 and spans the full screen, so it
+  // layers above both panes and the footer and nothing under it can take a
+  // click; its mouse handlers swallow (a click on the dim layer does nothing).
+  // Inside, a bordered panel carries the rulebook's shape — title, context
+  // line, body, and the `[ Cancel  Confirm ]` row — with the focused button
+  // marked (color + a `▶` caret, so the one-shot renderer can see it too).
+  const ConfirmOverlay: Component<{
+    dialog: ConfirmDialog;
+    focus: ConfirmButton;
+    onCancel: () => void;
+    onConfirm: () => void;
+  }> = ({ dialog: d, focus, onCancel, onConfirm }) => {
+    const swallow = (e: MouseEvent) => e.stopPropagation();
+    // The modal width caps sentence-length bodies to a couple of wrapped lines
+    // inside the fixed-width panel; the panel stays clear of the shell's edges.
+    const modalW = () => Math.max(40, Math.min(72, dims().width - 8));
+    const buttons: ConfirmButton[] = ["cancel", "confirm"];
+    return (
+      <box
+        position="absolute"
+        top={0}
+        left={0}
+        width="100%"
+        height="100%"
+        zIndex={10}
+        alignItems="center"
+        justifyContent="center"
+        backgroundColor={THEME.surface.dim}
+        onMouseDown={swallow}
+        onMouseUp={swallow}
+      >
+        <box
+          flexDirection="column"
+          width={modalW()}
+          backgroundColor={THEME.surface.panel}
+          border={true}
+          borderStyle="rounded"
+          borderColor={THEME.border.focused}
+          paddingLeft={3}
+          paddingRight={3}
+          paddingTop={1}
+          paddingBottom={1}
+        >
+          <RoleText role="h1">{d.title}</RoleText>
+          <RoleText role="meta">{d.context}</RoleText>
+          <RoleText role="body">{d.body}</RoleText>
+          <box flexDirection="row" justifyContent="center" paddingTop={1}>
+            <For each={buttons}>
+              {(which) => {
+                const focused = focus === which;
+                const label = which === "cancel" ? d.cancelLabel : d.confirmLabel;
+                return (
+                  <box
+                    flexDirection="row"
+                    paddingLeft={1}
+                    paddingRight={1}
+                    marginLeft={1}
+                    marginRight={1}
+                    backgroundColor={focused ? THEME.selBg : undefined}
+                    onMouseDown={(e: MouseEvent) => {
+                      if (e.button !== MouseButton.LEFT) return;
+                      e.stopPropagation();
+                      if (which === "cancel") onCancel();
+                      else onConfirm();
+                    }}
+                  >
+                    <text
+                      fg={focused ? THEME.text.title : THEME.text.dim}
+                      attributes={focused ? TextAttributes.BOLD : 0}
+                    >
+                      {focused ? `▶ ${label}` : `[ ${label} ]`}
+                    </text>
+                  </box>
+                );
+              }}
+            </For>
+          </box>
+        </box>
+      </box>
+    );
+  };
+
   return (
     <box flexDirection="column" flexGrow={1} live={true} backgroundColor={THEME.surface.bg} onMouseUp={() => copySelection(renderer)}>
       {/* header — flexShrink:0 keeps the row from collapsing when a below pane
@@ -901,6 +1130,27 @@ export const App: Component<AppProps> = (props) => {
           {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}
         </text>
       </box>
+
+      {/* the confirmation overlay — the shell's last child, absolute + zIndex,
+          so it layers above both panes and the footer while a dialog is open.
+          Keyed remount (see modalKey): every focus move repaints the buttons.
+          The fallback is a real (zero-size) element: Solid's server-mode Show
+          returns "" — an orphan text node — when `when` is falsy with no
+          fallback, the shell's established keyed-<Show> workaround always
+          passes one. */}
+      <Show when={modalKey()} keyed fallback={<box width={0} height={0} />}>
+        {(_k: string) => {
+          const m = modal()!;
+          return (
+            <ConfirmOverlay
+              dialog={m.dialog}
+              focus={m.focus}
+              onCancel={() => setModal(null)}
+              onConfirm={confirmModal}
+            />
+          );
+        }}
+      </Show>
     </box>
   );
 };
