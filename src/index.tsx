@@ -35,6 +35,8 @@ const client = new HerdrClient({ runner: makeProcessRunner(binPath) });
 // Issue 17: the plugin config — two TOML layers (user + repo), merged with
 // repo > user precedence. Profiles drive the dispatch kind/model; the
 // `transcripts:` block configures the finished-run extractor per agent kind.
+// Issue 04 (confirmation gate): the merged `[confirm]` policy flows to the
+// shell as its bypass prop — `false` per action suppresses that action's gate.
 const config = loadPluginConfig({ repoRoot });
 const dispatchCoordinator = new DispatchCoordinator({
   client,
@@ -64,6 +66,7 @@ function Root() {
       provider={provider}
       dispatchCoordinator={dispatchCoordinator}
       runController={runController}
+      confirmPolicy={config.confirm}
       onQuit={() => renderer.destroy()}
     />
   );

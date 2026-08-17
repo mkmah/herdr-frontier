@@ -70,6 +70,7 @@ describe("loadPluginConfig — two TOML layers, repo > user (issue 17)", () => {
     const cfg = loadPluginConfig({ repoRoot, userConfigDir: userDir });
     expect(cfg.profiles).toEqual(DEFAULT_PROFILES);
     expect(cfg.transcripts).toEqual({});
+    expect(cfg.confirm).toEqual({});
   });
 
   it("reads a user-only config (profiles + default_profile + transcripts)", async () => {
@@ -115,6 +116,35 @@ describe("loadPluginConfig — two TOML layers, repo > user (issue 17)", () => {
   });
 });
 
+describe("loadPluginConfig — [confirm] flows through the full load path (confirmation-gate 04)", () => {
+  it("parses [confirm] from a layer — all four Confirmable keys, run_* snake_case", async () => {
+    await writeUser(`[confirm]\ndispatch = false\nrelease = false\nrun_start = false\nrun_stop = false\n`);
+    const cfg = loadPluginConfig({ repoRoot, userConfigDir: userDir });
+    expect(cfg.confirm).toEqual({ dispatch: false, release: false, "run-start": false, "run-stop": false });
+  });
+
+  it("merges repo-over-user per key — a key absent from the repo falls through to the user layer", async () => {
+    await writeUser(`[confirm]\ndispatch = false\nrelease = true\nrun_stop = false\n`);
+    await writeRepo(`[confirm]\ndispatch = true\nrun_start = false\n`);
+    const cfg = loadPluginConfig({ repoRoot, userConfigDir: userDir });
+    // dispatch: repo true beats user false (a repo can pin the gate back on);
+    // run_start: repo-only; run_stop: user-only; release: user true.
+    expect(cfg.confirm).toEqual({ dispatch: true, release: true, "run-start": false, "run-stop": false });
+  });
+
+  it("an absent [confirm] in both layers keeps every gate on — the policy stays empty", async () => {
+    await writeUser(USER_TOML);
+    await writeRepo(REPO_TOML);
+    const cfg = loadPluginConfig({ repoRoot, userConfigDir: userDir });
+    expect(cfg.confirm).toEqual({});
+  });
+
+  it("a non-boolean [confirm] value is dropped loudly — the load throws naming the key", async () => {
+    await writeUser(`[confirm]\ndispatch = "yes"\n`);
+    expect(() => loadPluginConfig({ repoRoot, userConfigDir: userDir })).toThrow(/\[confirm\] dispatch/);
+  });
+});
+
 describe("mergeConfigs — the pure repo > user merge", () => {
   it("repo overrides user per key, user fills the gaps", () => {
     const cfg: PluginConfig = mergeConfigs(
@@ -142,11 +172,36 @@ describe("mergeConfigs — the pure repo > user merge", () => {
     const cfg = mergeConfigs(null, null);
     expect(cfg.profiles).toEqual(DEFAULT_PROFILES);
     expect(cfg.transcripts).toEqual({});
+    expect(cfg.confirm).toEqual({});
   });
 
   it("ignores non-string transcript values", () => {
     const cfg = mergeConfigs({ transcripts: { a: 3 as unknown as string, b: "ok" } }, null);
     expect(cfg.transcripts).toEqual({ b: "ok" });
+  });
+});
+
+describe("mergeConfigs — [confirm] (confirmation-gate 04)", () => {
+  it("records only the explicitly set keys — false suppresses, true keeps, absent means confirm", () => {
+    const cfg = mergeConfigs(
+      { confirm: { dispatch: false, release: true } },
+      { confirm: { run_start: false, run_stop: false } },
+    );
+    expect(cfg.confirm).toEqual({ dispatch: false, release: true, "run-start": false, "run-stop": false });
+  });
+
+  it("repo overrides user per key; a key absent from the repo falls through to the user", () => {
+    const cfg = mergeConfigs(
+      { confirm: { dispatch: false, release: false } },
+      { confirm: { dispatch: true, run_start: false } },
+    );
+    // repo's true beats user's false; release falls through; run_start is repo-only.
+    expect(cfg.confirm).toEqual({ dispatch: true, release: false, "run-start": false });
+  });
+
+  it("a non-boolean value in either layer is dropped loudly — the merge throws naming the key", () => {
+    expect(() => mergeConfigs({ confirm: { dispatch: 1 as unknown as boolean } }, null)).toThrow(/\[confirm\] dispatch/);
+    expect(() => mergeConfigs(null, { confirm: { run_stop: "no" as unknown as boolean } })).toThrow(/\[confirm\] run_stop/);
   });
 });
 

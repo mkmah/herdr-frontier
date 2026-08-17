@@ -21,6 +21,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
 import type { AgentStatus } from "./herdr-client.js";
 import type { RunController } from "./run.js";
+import type { ConfirmPolicy } from "./confirm.js";
 import {
   blockerResolved,
   buildRows,
@@ -74,6 +75,10 @@ export interface AppProps {
   dispatchCoordinator?: DispatchCoordinator;
   /** Automated run-controller (issue 14). Production builds one in index.tsx. */
   runController?: RunController;
+  /** The merged `[confirm]` bypass (confirmation-gate 04): `false` per trigger
+   *  suppresses that action's gate. Defaults to every gate on; the shell's gate
+   *  wiring consumes it (issue 05). */
+  confirmPolicy?: ConfirmPolicy;
 }
 
 /** The detail pane's dispatch feedback, scoped to the issue it dispatched. */
