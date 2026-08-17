@@ -28,9 +28,19 @@ command = ["./bin/herdr-frontier"]
 
 # Open the pane imperatively (declared panes surface via `herdr plugin pane open`).
 # Shells out through `$HERDR_BIN_PATH` (injected by herdr) since command vectors
-# are exec'd directly, not through a shell.
+# are exec'd directly, not through a shell. Like open-tab below, the opened pane
+# is renamed so it carries a stable label instead of the manifest default.
 [[actions]]
 id = "open"
 title = "Open herdr-frontier issues"
 contexts = ["workspace"]
-command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-frontier --entrypoint issues --placement split --focus"]
+command = ["sh", "-c", "pane_id=$(\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-frontier --entrypoint issues --placement split --focus | grep -o '\"pane_id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && test -n \"$pane_id\" && \"$HERDR_BIN_PATH\" pane rename \"$pane_id\" Issues"]
+
+# Open the issue list in its own tab (same pane, dedicated tab instead of a split).
+# herdr names new plugin-pane tabs by number; grab the created tab id from the
+# open response and rename it (plugin.pane.open exposes no label parameter).
+[[actions]]
+id = "open-tab"
+title = "Open herdr-frontier issues in a tab"
+contexts = ["workspace"]
+command = ["sh", "-c", "tab_id=$(\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-frontier --entrypoint issues --placement tab --focus | grep -o '\"tab_id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && test -n \"$tab_id\" && \"$HERDR_BIN_PATH\" tab rename \"$tab_id\" Issues"]

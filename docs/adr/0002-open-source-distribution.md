@@ -14,10 +14,19 @@ decide how it ships: a self-contained compiled binary, a version that lives only
   `bun install --production --frozen-lockfile` → `scripts/build.ts`, which compiles the
   OpenTUI/Solid render layer into a single `bin/herdr-frontier` binary. The pane runs that
   binary directly. **Bun is needed only at install time** — the compiled binary embeds it.
-- **The build must apply the Solid JSX transform at build time**, not runtime. A bare
-  `bun build --compile` fails at runtime (`preload not found "@opentui/solid/preload"`),
-  because `@opentui/solid`'s preload is a runtime Bun transpiler. `scripts/build.ts` instead
+- **The build must apply the Solid JSX transform at build time**, not runtime. `scripts/build.ts`
   passes `createSolidTransformPlugin()` from `@opentui/solid/bun-plugin` to `Bun.build({ compile: true })`.
+  The preload is *not* allowed to ship in a `bunfig.toml`: compiled binaries read `bunfig.toml`
+  from their cwd, and herdr runs panes with the **plugin root** as cwd — a shipped
+  `bunfig.toml` makes the pane die instantly at runtime with
+  `error: preload not found "@opentui/solid/preload"` (exit 1 → herdr closes the pane).
+  Dev passes the preload explicitly instead: `bun run --preload @opentui/solid/preload`.
+- **The pane resolves the workspace root from herdr context, not cwd.** herdr's plugin-pane
+  contract is that runtime commands run with the plugin directory as cwd (see plugins docs),
+  so `process.cwd()` would scan the plugin's own checkout for `.scratch/*/issues/` and show
+  nothing. Instead the pane reads `HERDR_PLUGIN_CONTEXT_JSON` (`workspace_cwd`, or
+  `focused_pane_cwd` as fallback) — the repo the pane was opened against. Standalone dev
+  (`bun run src/index.tsx`, cwd) is unchanged.
 - **Version lives only in `herdr-plugin.toml`.** package.json stays `private` —
   there is no npm package. Changesets bump the package.json version, the
   `version` script syncs it into the manifest, and releases are GitHub Releases
