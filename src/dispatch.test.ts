@@ -105,6 +105,10 @@ const ok = (text: unknown) => JSON.stringify({ id: "x", result: text });
 const TAB_OK = ok({ tab: { tab_id: "wZ:t2" }, root_pane: { pane_id: "wZ:p3" } });
 const SCHEMA = JSON.stringify({ schemas: { request: { $defs: { AgentStartParams: { properties: { kind: {} } } } } } });
 
+/** The `pane wait-output` vector `dispatchIssue` issues between tab create and
+ *  agent start (herdr fast-fails a fresh, still-initializing shell). */
+const WAIT_SHELL = "pane wait-output wZ:p3 --regex [❯➜$#%>]\\s*$ --source recent --timeout 30000";
+
 /** A config where the implement profile carries a model passed raw in args. */
 const PROFILES: ProfilesConfig = {
   profiles: { implement: { kind: "opencode", args: ["-m", "claude-sonnet-4-5"] } },
@@ -122,6 +126,7 @@ function harness(
   const { runner, calls } = recordingRunner({
     "api schema --json": SCHEMA,
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
+    [WAIT_SHELL]: ok({ matched_line: "❯" }),
     "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": ok({}),
     [`agent prompt herdr-frontier-12 /implement ${ID}`]: ok({}),
     ...over.fixtures,
@@ -167,14 +172,42 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     // cross-process mutex intent, not something left to the agent.
     expect((await h.provider.readIssue(ID)).status).toBe("claimed");
 
-    // The herdr invocations: tab → agent start → (lazy schema introspection, at
-    // first start-agent) → prompt, in schema-driven order.
+    // The herdr invocations: tab → shell-prompt gate → agent start → (lazy
+    // schema introspection, at first start-agent) → prompt, in schema-driven
+    // order.
     expect(h.calls.map((c) => c.join(" "))).toEqual([
       "tab create --cwd /repo --label 12 — Driver --no-focus",
+      WAIT_SHELL,
       "api schema --json",
       "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5",
       `agent prompt herdr-frontier-12 /implement ${ID}`,
     ]);
+  });
+
+  it("waits for the fresh tab's shell prompt before starting the agent (the agent_pane_busy gate)", async () => {
+    // herdr fast-fails `agent start` on a still-initializing shell
+    // (`agent_pane_busy: not an available shell`) — its --timeout only covers
+    // post-launch readiness. The dispatch must observe the prompt first.
+    const h = harness([mk()]);
+    await h.coordinator.dispatchIssue(mk());
+    const waitIdx = h.calls.findIndex((c) => c[0] === "pane" && c[1] === "wait-output");
+    const startIdx = h.calls.findIndex((c) => c[0] === "agent" && c[1] === "start");
+    expect(waitIdx).toBeGreaterThanOrEqual(0);
+    expect(startIdx).toBeGreaterThan(waitIdx);
+  });
+
+  it("closes the tab when the shell never reaches a prompt (waitForShell fails — no agent start)", async () => {
+    // The wait-output gate times out (e.g. a shell that never renders a prompt).
+    // The dispatch rethrows, closes the just-created tab, and frees the mutex —
+    // agent start is never reached.
+    const h = harness(
+      [mk()],
+      { fixtures: { [WAIT_SHELL]: "__FAIL__: timed out waiting for shell prompt", "tab close wZ:t2": ok({}) } },
+    );
+    await expect(h.coordinator.dispatchIssue(mk())).rejects.toThrow(/shell prompt/);
+    expect(h.calls.map((c) => c.join(" "))).toContain("tab close wZ:t2");
+    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
+    expect(h.claims.tryClaim(ID)).toBe(true); // mutex freed → retryable
   });
 
   it("prevents a concurrent second dispatch of the same issue (shared mutex, no second claim)", async () => {
@@ -415,6 +448,7 @@ describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
       }
       if (key === "api schema --json") return { code: 0, stdout: SCHEMA, stderr: "" };
       if (key === `tab create --cwd ${CWD} --label 12 — Driver --no-focus`) return { code: 0, stdout: TAB_OK, stderr: "" };
+      if (key === WAIT_SHELL) return { code: 0, stdout: ok({ matched_line: "❯" }), stderr: "" };
       if (key === "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5") {
         return { code: 0, stdout: ok({}), stderr: "" };
       }

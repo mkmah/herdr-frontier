@@ -236,6 +236,42 @@ describe("HerdrClient.showNotification (canned notification show)", () => {
 
 // --- prompt-API shim --------------------------------------------------------
 
+describe("HerdrClient.waitForShell (the agent-start shell gate)", () => {
+  it("issues `pane wait-output <pane> --regex <prompt> --source recent --timeout <default>`", async () => {
+    const { runner, calls } = fixtureRunner({
+      "pane wait-output wZ:p3 --regex [❯➜$#%>]\\s*$ --source recent --timeout 30000": JSON.stringify({
+        id: "cli:pane:wait-output",
+        result: { matched_line: "❯", pane_id: "wZ:p3" },
+      }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.waitForShell("wZ:p3");
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      "pane wait-output wZ:p3 --regex [❯➜$#%>]\\s*$ --source recent --timeout 30000",
+    ]);
+  });
+
+  it("honours an explicit prompt regex and timeout", async () => {
+    const { runner, calls } = fixtureRunner({
+      "pane wait-output wZ:p3 --regex custom --source recent --timeout 5000": JSON.stringify({
+        id: "x",
+        result: { matched_line: "custom", pane_id: "wZ:p3" },
+      }),
+    });
+    const client = new HerdrClient({ runner });
+    await client.waitForShell("wZ:p3", { pattern: "custom", timeoutMs: 5000 });
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      "pane wait-output wZ:p3 --regex custom --source recent --timeout 5000",
+    ]);
+  });
+
+  it("surfaces a non-zero exit (pane never reached a prompt) as a HerdrError", async () => {
+    const { runner } = fixtureRunner({}); // no fixture → exit 1
+    const client = new HerdrClient({ runner });
+    await expect(client.waitForShell("wZ:p3")).rejects.toThrow(/pane wait-output wZ:p3 .*exited 1/);
+  });
+});
+
 describe("HerdrClient.prompt — the prompt-API shim (issue 12)", () => {
   it("branches to `agent prompt` when the schema has no AgentSendParams", async () => {
     const { runner, calls } = fixtureRunner({
@@ -299,12 +335,13 @@ describe("HerdrClient.prompt — the prompt-API shim (issue 12)", () => {
     ]);
   });
 
-  // agent start must wait for the freshly-created pane's shell to reach its
-  // prompt — a heavy shell init (docker/nvm/pyenv) can exceed herdr's 30s
-  // default and fail with "agent target pane … is not an available shell". The
-  // reference wayfinder driver hard-codes 120s (herdr.rs agent_start_kind); we
-  // default to the same at the driver boundary.
-  it("startAgent defaults to a 120s readiness timeout (matches the reference driver)", async () => {
+  // agent start must not be reached until the fresh tab's shell is at its
+  // prompt — herdr fast-fails a still-initializing shell with
+  // `agent_pane_busy`/"not an available shell" (its --timeout only covers
+  // post-launch readiness; dispatch gates on the prompt via waitForShell
+  // first). The 120s `agent start` timeout matches the reference wayfinder
+  // driver (`herdr.rs agent_start_kind`).
+  it("startAgent defaults to a 120s post-launch readiness timeout (matches the reference driver)", async () => {
     const { runner, calls } = fixtureRunner({
       "api schema --json": SCHEMA_WITH_SEND,
       "agent start #12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": JSON.stringify({ id: "x", result: {} }),

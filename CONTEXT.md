@@ -59,3 +59,7 @@ _Avoid_: Inbox, Notification feed.
 **Transcript**:
 A finished run's output, ingested back into the tracker as resolution/notes via a plugin-defined extractor over herdr snapshots (herdr exposes no extractor contract of its own).
 _Avoid_: Log, Output dump.
+
+**Confirmable action**:
+An action that spawns or kills a herdr agent or rewrites issue status, so it requires a confirmation gate before it executes — dispatch, release, run-start, and run-stop. Navigation, reload, and quit never confirm. The gate is the default (Confirm is the pre-focused button, Esc cancels); it is bypassable per action by a `[confirm]` config table (repo over user precedence), never by an in-modal toggle.
+_Avoid_: Destructive action, Confirmation prompt.

@@ -24,9 +24,16 @@ You need [herdr](https://herdr.dev) 0.8.0 or later. Bun is required only at inst
 herdr plugin install mkmah/herdr-frontier
 ```
 
-> If the pane opens and closes instantly, reinstall (the first 0.1.0 build shipped a
-> `bunfig.toml` that the compiled binary re-reads and dies on — fixed in the next
-> release via `herdr plugin update`).
+> If the pane opens and closes instantly, update to the fixed release: the first
+> 0.1.0 build shipped a `bunfig.toml` that the compiled binary re-reads and dies on.
+> herdr has no `plugin update` command, so uninstall and reinstall to pull the new
+> release (your `herdr-frontier` keybindings in `config.toml` keep working — the
+> plugin id is unchanged):
+>
+> ```bash
+> herdr plugin uninstall herdr-frontier
+> herdr plugin install mkmah/herdr-frontier
+> ```
 
 In any herdr workspace that hosts issues under its own `.scratch/<feature>/issues/`, open
 the pane (the pane resolves the workspace root from herdr's context — it runs from the

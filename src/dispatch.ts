@@ -135,6 +135,12 @@ export interface DispatchDeps {
    *  unconfirmed claim whose tab is gone (lets the agent register first).
    *  Defaults to 10s. */
   deadDispatchGraceMs?: number;
+  /** The shell-prompt regex {@link HerdrClient.waitForShell} gates `agent start`
+   *  on (defaults to `DEFAULT_PROMPT_REGEX`; override for a non-standard prompt). */
+  shellPromptRegex?: string;
+  /** How long to wait for the fresh tab's shell prompt before failing the
+   *  dispatch (defaults to `DEFAULT_SHELL_READY_TIMEOUT_MS`). */
+  shellReadyTimeoutMs?: number;
 }
 
 export type DispatchFailureReason =
@@ -174,9 +180,10 @@ export class DispatchCoordinator {
    * first (never dispatch a human turn), gate on the loaded status, take the
    * in-session mutex, then **claim** it through the provider — the atomic,
    * cross-process mutex intent that writes `Status: claimed` BEFORE any work
-   * (issue 12 acceptance #1). With the claim held, drive herdr: tab → agent
-   * start (profile kind + raw args) → prompt with `/implement {id}` / `/wayfinder
-   * {id}`. Two claim outcomes are surfaced as failures rather than thrown: a
+   * (issue 12 acceptance #1). With the claim held, drive herdr: tab → wait for
+   * its shell prompt → agent start (profile kind + raw args) → prompt with
+   * `/implement {id}` / `/wayfinder {id}`. Two claim outcomes are surfaced as
+   * failures rather than thrown: a
    * concurrent process that won the race between our load and our call raises
    * {@link AlreadyClaimed} (`already-claimed`, issue 12 acceptance #3); a
    * contended/stale claim lock raises {@link ClaimBusy} (`claim-busy` — no status
@@ -212,6 +219,13 @@ export class DispatchCoordinator {
       });
       this.deps.claims.setTabId(issue.id, tabId);
       this.deps.claims.setPaneId(issue.id, paneId);
+      // `agent start` fast-fails a fresh tab whose shell is still initializing
+      // (`agent_pane_busy: not an available shell` — its --timeout only covers
+      // post-launch readiness). Wait for the pane's shell prompt first.
+      await this.deps.client.waitForShell(paneId, {
+        pattern: this.deps.shellPromptRegex,
+        timeoutMs: this.deps.shellReadyTimeoutMs,
+      });
       await this.deps.client.startAgent({ name, kind: profile.kind, pane: paneId, args: profile.args });
       await this.deps.client.prompt(name, command, paneId);
       return { ok: true, issue: claimed, command, paneId, kind: profile.kind, args: profile.args };

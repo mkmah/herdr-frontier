@@ -144,6 +144,7 @@ function herdrHarness(): { client: HerdrClient; calls: string[][] } {
       const n = ++seq;
       return { code: 0, stdout: ok({ tab: { tab_id: `wZ:t${n}` }, root_pane: { pane_id: `wZ:p${n}` } }), stderr: "" };
     }
+    if (args[0] === "pane" && args[1] === "wait-output") return { code: 0, stdout: ok({ matched_line: "❯" }), stderr: "" };
     if (args[0] === "agent" && args[1] === "start") return { code: 0, stdout: ok({}), stderr: "" };
     if (args[0] === "agent" && args[1] === "prompt") return { code: 0, stdout: ok({}), stderr: "" };
     if (args[0] === "agent" && args[1] === "read") {

@@ -44,6 +44,27 @@ export class HerdrError extends Error {
   }
 }
 
+/** Options for {@link HerdrClient.waitForShell} — the gate that lets a
+ *  freshly-created tab's shell reach its prompt before `agent start`. */
+export interface WaitForShellOptions {
+  /** Rust-regex matching a shell-prompt line. Defaults to
+   *  {@link DEFAULT_PROMPT_REGEX}. */
+  pattern?: string;
+  /** How long to keep polling before failing. Defaults to
+   *  {@link DEFAULT_SHELL_READY_TIMEOUT_MS}. */
+  timeoutMs?: number;
+}
+
+/**
+ * The default shell-prompt regex: a prompt-suffix character at line end. Matches
+ * fish/starship `❯`, zsh `%`, bash/zsh `$`/`#`, and `> ` without matching
+ * rc-file output mid-line. `pane wait-output` matches per line.
+ */
+export const DEFAULT_PROMPT_REGEX = "[❯➜$#%>]\\s*$";
+
+/** Default window for the fresh tab's shell to reach its prompt. */
+export const DEFAULT_SHELL_READY_TIMEOUT_MS = 30_000;
+
 /** Build the `agent start` vector for a profile dispatch. */
 export interface StartOptions {
   /** Agent session name (later the prompt target). */
@@ -238,13 +259,34 @@ export class HerdrClient {
   }
 
   /**
+   * Wait until the pane's shell is at its prompt (`pane wait-output` — matches
+   * existing output immediately, then polls the pane). herdr 0.8.0's `agent
+   * start` pre-checks "available shell" synchronously and fast-fails a freshly
+   * created tab's still-initializing shell with `agent_pane_busy` / "not an
+   * available shell" — its `--timeout` only covers post-launch interactive
+   * readiness, not this pre-check (validated live). So the prompt must be seen
+   * HERE, before {@link startAgent}. Throws when `pane wait-output` exits
+   * non-zero (e.g. the pane never reaches a prompt within `timeoutMs`).
+   */
+  async waitForShell(paneId: string, o: WaitForShellOptions = {}): Promise<void> {
+    const args = [
+      "pane", "wait-output", paneId,
+      "--regex", o.pattern ?? DEFAULT_PROMPT_REGEX,
+      "--source", "recent",
+      "--timeout", String(o.timeoutMs ?? DEFAULT_SHELL_READY_TIMEOUT_MS),
+    ];
+    await this.run(args);
+  }
+
+  /**
    * Start the agent in a pane: `agent start`, shaped to the server's schema.
-   * Defaults `timeoutMs` to 120s: `agent start` requires the pane to be at its
-   * interactive shell prompt, and a freshly-created tab's shell (with a heavy
-   * docker/nvm/pyenv init) can exceed herdr's own 30s default — failing with
-   * `agent_pane_busy` / "not an available shell". The reference wayfinder driver
-   * hard-codes 120s (`herdr.rs agent_start_kind`); an explicit `o.timeoutMs`
-   * overrides it.
+   * herdr expects the pane to ALREADY be at its interactive shell prompt — the
+   * `--timeout` here only bounds the post-launch wait for the agent to render
+   * its TUI; it does NOT cover a still-initializing shell (that fast-fails with
+   * `agent_pane_busy`). Dispatch therefore calls {@link waitForShell} on the
+   * freshly-created tab's pane first. Defaults `timeoutMs` to 120s (matches the
+   * reference wayfinder driver's hard-coded 120s, `herdr.rs agent_start_kind`);
+   * an explicit `o.timeoutMs` overrides it.
    */
   async startAgent(o: StartOptions): Promise<void> {
     const api = await this.detectStartApi();
