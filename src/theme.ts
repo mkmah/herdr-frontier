@@ -80,9 +80,9 @@ export function iconColor(state: StateKey, pulse: boolean): string {
 // with. Built lazily (SyntaxStyle owns a native handle, so we make exactly one
 // for the app's lifetime) and derived from the theme tokens, so headings, bold,
 // lists, and inline code follow the palette — change a token → the rendered
-// markdown re-themes with it. Scopes are exactly the ones @opentui/core 0.5.1
-// resolves (verified against its renderer: default + the markup.* set below;
-// `markup.bold`/`markup.heading.*` are not consulted — strong/heading are).
+// markdown re-themes with it. Scopes are OpenTUI's documented markup grammar:
+// core 0.5.1 resolves the base scopes (markup.heading/strong/raw) and falls
+// back to them; the .N-suffixed forms render once a newer core consults them.
 let markdownStyle: SyntaxStyle | null = null;
 
 /** The app's shared markdown SyntaxStyle — create once, the pane reads it. */
@@ -91,12 +91,15 @@ export function markdownSyntaxStyle(): SyntaxStyle {
     markdownStyle = SyntaxStyle.fromStyles({
       default: { fg: text.body },
       "markup.heading": { fg: accent.brand, bold: true },
+      "markup.heading.1": { fg: text.title, bold: true },
       "markup.strong": { fg: text.title, bold: true },
+      "markup.bold": { fg: text.title, bold: true },
       "markup.italic": { fg: text.body, italic: true },
       "markup.strikethrough": { fg: text.dim },
       "markup.list": { fg: state.frontier },
       "markup.quote": { fg: text.dim, italic: true },
       "markup.raw": { fg: accent.id },
+      "markup.raw.block": { fg: accent.id },
       "markup.link": { fg: accent.brand, underline: true },
       "markup.link.url": { fg: accent.brand, underline: true },
       "markup.link.label": { fg: text.title },

@@ -663,7 +663,11 @@ export const App: Component<AppProps> = (props) => {
 
   // Key for the detail pane's content. Includes the selection, whether the body
   // read has landed (L/P/E), the pane width (for header re-truncation), and the
-  // dispatch/release feedback (so the pane remounts when either changes).
+  // dispatch/release feedback (so the pane remounts when either changes). The
+  // run-controller pulse is deliberately NOT here — it bumps every ~2s poll, so
+  // including it would remount the whole pane (markdown body included) on a
+  // timer and the markdown visibly flickers; the run-status line remounts on
+  // its own key instead (see DetailContent).
   // OpenTUI 0.5.1 does not repaint text or props in place, so the pane must
   // remount when the read lands or the loaded body would never appear (same
   // workaround as the list-row selection background and pulse). NOTE: the keyed
@@ -680,7 +684,7 @@ export const App: Component<AppProps> = (props) => {
       ds.status === "idle" ? "I" : ds.status === "running" ? "R" : ds.status === "ok" ? `ok:${ds.paneId}` : "E";
     const rs = releaseState();
     const releasePart = rs.status === "idle" ? "I" : rs.status === "running" ? "R" : rs.status === "ok" ? `ok:${rs.tabClosed ? 1 : 0}` : "E";
-    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerWFor()}|${dispatchPart}|${releasePart}|${runVersion()}`;
+    return `${s.id}|${loaded ? "L" : detailLoading() ? "P" : "E"}|${detailInnerWFor()}|${dispatchPart}|${releasePart}`;
   });
 
   // The confirmation overlay's keyed <Show> key — includes which dialog, the
@@ -824,22 +828,28 @@ export const App: Component<AppProps> = (props) => {
             {dispatchable ? outcome.command : "(no auto-dispatch — human turn)"}
           </text>
         </box>
-        {(() => {
-          const run = props.runController?.load(effortOf(sel.id));
-          if (!run) return null;
-          const inflight = run.issues.filter((i) => i.status === "dispatched").length;
-          const pending = run.issues.filter((i) => i.status === "pending").length;
-          const done = run.issues.filter((i) => i.status === "resolved").length;
-          const failed = run.issues.filter((i) => i.status === "failed").length;
-          return (
-            <box flexDirection="row" paddingTop={1}>
-              <RoleText role="meta">run: </RoleText>
-              <text fg={run.status === "running" ? THEME.state.running : THEME.state.done} attributes={TextAttributes.BOLD}>
-                {`${run.status} · ${inflight} in-flight · ${pending} pending · ${done} done${failed ? ` · ${failed} failed` : ""}`}
-              </text>
-            </box>
-          );
-        })()}
+        {/* The run-status line remounts on its own key — the ~2s poll bumps
+            runVersion every tick, and remounting just this line keeps the
+            counts fresh without recreating the whole pane (which made the
+            markdown body below flicker on a timer). */}
+        <Show when={`run#${runVersion()}`} keyed>
+          {(_runKey: string) => {
+            const run = props.runController?.load(effortOf(sel.id));
+            if (!run) return null;
+            const inflight = run.issues.filter((i) => i.status === "dispatched").length;
+            const pending = run.issues.filter((i) => i.status === "pending").length;
+            const done = run.issues.filter((i) => i.status === "resolved").length;
+            const failed = run.issues.filter((i) => i.status === "failed").length;
+            return (
+              <box flexDirection="row" paddingTop={1}>
+                <RoleText role="meta">run: </RoleText>
+                <text fg={run.status === "running" ? THEME.state.running : THEME.state.done} attributes={TextAttributes.BOLD}>
+                  {`${run.status} · ${inflight} in-flight · ${pending} pending · ${done} done${failed ? ` · ${failed} failed` : ""}`}
+                </text>
+              </box>
+            );
+          }}
+        </Show>
         <text fg={THEME.text.dimmer}>{""}</text>
         {showDispatch ? (
           <text
@@ -868,9 +878,12 @@ export const App: Component<AppProps> = (props) => {
           </text>
         ) : null}
         {loaded && detailRec ? (
+          // syntaxStyle before content: OpenTUI's reconciler applies JSX props
+          // as setters in declaration order, so `content` first would build the
+          // blocks before the style lands → one unstyled frame on every mount.
           <markdown
-            content={detailRec.body}
             syntaxStyle={markdownSyntaxStyle()}
+            content={detailRec.body}
             fg={THEME.text.body}
           />
         ) : (
