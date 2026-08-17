@@ -21,8 +21,14 @@ import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
 import { RunController, FileRunStore, pluginStateDir } from "./run.js";
 import { loadPluginConfig } from "./config.js";
 import { TranscriptIngester } from "./transcript.js";
+import { PLUGIN_CONTEXT_KEY, resolveRepoRoot } from "./workspace.js";
 
-const repoRoot = process.cwd();
+// The workspace herdr opened the pane against (its `workspace_cwd` from
+// HERDR_PLUGIN_CONTEXT_JSON), not the pane's process cwd — herdr runs plugin
+// panes from the plugin root, so cwd alone would scan the plugin's own dir for
+// `.scratch/*/issues/` and find nothing. Standalone (`bun run src/index.tsx`) is
+// cwd, as before.
+const repoRoot = resolveRepoRoot(process.cwd(), process.env[PLUGIN_CONTEXT_KEY]);
 const provider = new LocalMarkdownProvider({ repoRoot });
 const binPath = process.env.HERDR_BIN_PATH ?? "herdr";
 const client = new HerdrClient({ runner: makeProcessRunner(binPath) });

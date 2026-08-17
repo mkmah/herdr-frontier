@@ -5,7 +5,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run --watch src/index.tsx",
+    "dev": "bun run --preload @opentui/solid/preload --watch src/index.tsx",
     "build": "bun run scripts/build.ts",
     "policy:check": "bun run src/policy-check.ts",
     "changeset": "changeset",

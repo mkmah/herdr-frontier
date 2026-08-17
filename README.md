@@ -21,14 +21,52 @@ You need [herdr](https://herdr.dev) 0.8.0 or later. Bun is required only at inst
 (the plugin compiles itself on your machine); the resulting binary runs with no Bun.
 
 ```bash
-herdr plugin install <owner>/herdr-frontier
+herdr plugin install mkmah/herdr-frontier
 ```
 
-In a repo whose issues live under `.scratch/<feature>/issues/`:
+> If the pane opens and closes instantly, reinstall (the first 0.1.0 build shipped a
+> `bunfig.toml` that the compiled binary re-reads and dies on — fixed in the next
+> release via `herdr plugin update`).
+
+In any herdr workspace that hosts issues under its own `.scratch/<feature>/issues/`, open
+the pane (the pane resolves the workspace root from herdr's context — it runs from the
+installed plugin checkout, not your repo):
 
 ```bash
 herdr plugin pane open --plugin herdr-frontier --entrypoint issues --placement split --focus
 ```
+
+### Open it in a tab with a keybinding
+
+The manifest ships two actions — `open` (split, the command above) and `open-tab`
+(dedicated tab) — either of which herdr can map onto a key. Both name what they
+create: `open` renames the split pane to `Issues`, and `open-tab` names the new
+tab `Issues` (herdr numbers plugin-pane tabs by default and would otherwise label
+them "1, 2, 3…"; `plugin.pane.open` exposes no label parameter, so each action
+captures the id from its own open response and renames it). With a
+`[keys] prefix` of `ctrl+a`, add this to `~/.config/herdr/config.toml` and run
+`herdr server reload-config`:
+
+```toml
+# open the frontier issue list in its own tab
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "herdr-frontier.open-tab"
+description = "Open herdr-frontier issues in a tab"
+
+# …or as a split in the current tab
+[[keys.command]]
+key = "prefix+shift+f"
+type = "plugin_action"
+command = "herdr-frontier.open"
+description = "Open herdr-frontier issues (split)"
+```
+
+`prefix+f` / `prefix+shift+f` are the author's own bindings — pick any key your
+config doesn't already use (`herdr config check` flags conflicts, and `prefix+?`
+in herdr shows the live keymap). The actions are interchangeable: bind either
+action to whichever key you prefer.
 
 ## Quick start
 

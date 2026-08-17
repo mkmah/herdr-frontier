@@ -2,7 +2,10 @@
 //
 // `bun build --compile` alone is not enough: the app is JSX/Solid and needs the
 // Solid transform plugin applied at build time (the `@opentui/solid/preload`
-// bunfig hook is a runtime transpiler, useless inside a compiled binary).
+// runtime transpiler is passed to `bun run` explicitly — see the `dev` script —
+// and must never live in a `bunfig.toml`, because compiled binaries read
+// bunfig.toml from their cwd and would die at runtime with
+// `preload not found` — see ADR-0002).
 //
 // Output lands at `bin/herdr-frontier` — Bun names a compiled binary after the
 // entrypoint's directory ("src"), so we build into `bin/` and rename.
