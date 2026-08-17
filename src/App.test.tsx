@@ -243,6 +243,37 @@ describe("App (initial render smoke — two-pane shell)", () => {
     setup.renderer.destroy();
   });
 
+  // The detail body is the Issue's whole markdown document — rendered through
+  // OpenTUI's <markdown> element under the header rows, so headings/lists/bold
+  // paint structurally and the syntax markers are concealed (the pane shows the
+  // work, not the .md). Same render path as the tree view's detail pane (the
+  // DetailPane/DetailContent split is shared), so one smoke covers both views.
+  it("renders the detail body as markdown with concealed syntax markers", async () => {
+    const issue = mk();
+    const detail: IssueDetail = {
+      ...issue,
+      body: "# Blockers\n\nRewrite the `driver`. **Boldly** ship it.\n\n- one\n- two",
+      comments: [],
+    };
+    const setup = await testRender(
+      () => <App provider={noopProvider} initialIssues={[issue]} initialDetail={detail} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // markdown structure paints — heading, inline code, emphasis, list items
+    expect(frame).toContain("Blockers");
+    expect(frame).toContain("Rewrite the driver.");
+    expect(frame).toContain("Boldly ship it.");
+    expect(frame).toContain("- one");
+    expect(frame).toContain("- two");
+    // the markers themselves are concealed — no literal .md syntax in the frame
+    expect(frame).not.toContain("# Blockers");
+    expect(frame).not.toContain("**");
+    expect(frame).not.toContain("`driver`");
+    setup.renderer.destroy();
+  });
+
   it("renders the empty state when initialIssues is empty", async () => {
     const setup = await testRender(() => <App provider={noopProvider} initialIssues={[]} />);
     await setup.flush();

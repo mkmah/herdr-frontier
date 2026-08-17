@@ -4,7 +4,7 @@
 // Left: a fixed 40% list pane of every Issue, grouped by run-root (the effort
 // directory encoded in each id), ghui-style rows (state glyph · #id · truncated
 // title · tasks ratio · age). Right: a detail pane (60%) showing the selected
-// Issue's labels, blocked-by, agent, tasks, age, and body.
+// Issue's labels, blocked-by, agent, tasks, age, and markdown-rendered body.
 //
 // Keys:  j/k (↑/↓) move · Tab swap the focused pane (border reflects focus)
 //        Enter/x/s/S gate behind a confirmation dialog · r reload · q quit
@@ -47,7 +47,7 @@ import {
   type ClickRecord,
   type Focus,
 } from "./display.js";
-import { iconColor, THEME, stateColor, triageColor } from "./theme.js";
+import { iconColor, markdownSyntaxStyle, THEME, stateColor, triageColor } from "./theme.js";
 import { buildForest, flattenForest } from "./tree.js";
 import { dispatch } from "./orchestrator.js";
 import type { DispatchCoordinator } from "./dispatch.js";
@@ -779,15 +779,16 @@ export const App: Component<AppProps> = (props) => {
   // The verbose record for the selected issue, shared by the list view's
   // right-hand pane and the tree view's bottom pane (issue 15): title, label
   // chips, blocked-by/agent/tasks/age, the run status, the resolved launch
-  // line, dispatch/release feedback, and the body. `innerW` is the pane's
-  // inner width (the split differs between the two views). Rendered inside a
-  // keyed <Show> (see detailKey) so the body paints when the read lands.
+  // line, dispatch/release feedback, and the body — the issue's whole document
+  // rendered through OpenTUI's <markdown> element under the header rows.
+  // `innerW` is the pane's inner width (the split differs between the two
+  // views). Rendered inside a keyed <Show> (see detailKey) so the body paints
+  // when the read lands.
   const DetailContent: Component<{ innerW: number }> = ({ innerW }) => {
     const sel = selected();
     if (!sel) return null;
     const detailRec = detail();
     const loaded = detailRec && detailRec.id === sel.id;
-    const body = loaded ? detailRec.body : null;
     const ic = iconFor(sel, resolvedFor(sel), agentStatusOf(sel));
     const headerBudget = Math.max(0, innerW - (2 + issueNum(sel.id).length + 2));
     const outcome = dispatch(sel);
@@ -866,7 +867,15 @@ export const App: Component<AppProps> = (props) => {
                 : "⟳ stopping…"}
           </text>
         ) : null}
-        {loaded ? <RoleText role="body">{body}</RoleText> : <RoleText role="body">{detailLoading() ? " loading body…" : ""}</RoleText>}
+        {loaded && detailRec ? (
+          <markdown
+            content={detailRec.body}
+            syntaxStyle={markdownSyntaxStyle()}
+            fg={THEME.text.body}
+          />
+        ) : (
+          <RoleText role="body">{detailLoading() ? " loading body…" : ""}</RoleText>
+        )}
       </box>
     );
   };
