@@ -7,7 +7,7 @@
 // Issue's labels, blocked-by, agent, tasks, age, and body.
 //
 // Keys:  j/k (↑/↓) move · Tab swap the focused pane (border reflects focus)
-//        r reload · q/Esc quit
+//        r reload · q quit
 //
 // One cross-view theme module (./theme.ts) drives the header, list, detail, and
 // footer — change a token and the whole app re-themes. All presentation logic
@@ -68,7 +68,7 @@ export interface AppProps {
   initialDetail?: IssueDetail;
   /** Initial view (test seam); production defaults to the primary list. */
   initialView?: AppView;
-  /** Called on q/Esc. Defaults to `renderer.destroy()` (restores the terminal); overridable for tests. */
+  /** Called on q. Defaults to `renderer.destroy()` (restores the terminal); overridable for tests. */
   onQuit?: () => void;
   /** Manual single-issue dispatch (issue 12). Production builds one in index.tsx. */
   dispatchCoordinator?: DispatchCoordinator;
@@ -126,7 +126,7 @@ export type AppKeyAction =
  *  with `shift: true` (raw terminal) or `name: "S"` (kitty protocol); both map
  *  to stop. Returns null for keys the shell ignores. */
 export function appKeyAction(key: { name?: string; shift?: boolean }): AppKeyAction | null {
-  if (key.name === "q" || key.name === "escape") return "quit";
+  if (key.name === "q") return "quit";
   if (key.name === "tab") return "focus";
   if (key.name === "j" || key.name === "down") return "down";
   if (key.name === "k" || key.name === "up") return "up";

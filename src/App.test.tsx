@@ -68,7 +68,7 @@ describe("appKeyAction — the key bindings (issue 14 stop)", () => {
 
   it("keeps the other bindings stable", () => {
     expect(appKeyAction({ name: "q" })).toBe("quit");
-    expect(appKeyAction({ name: "escape" })).toBe("quit");
+    expect(appKeyAction({ name: "escape" })).toBeNull(); // Esc no longer quits — it's a no-op outside a modal
     expect(appKeyAction({ name: "tab" })).toBe("focus");
     expect(appKeyAction({ name: "j" })).toBe("down");
     expect(appKeyAction({ name: "down" })).toBe("down");
@@ -79,6 +79,11 @@ describe("appKeyAction — the key bindings (issue 14 stop)", () => {
     expect(appKeyAction({ name: "r" })).toBe("reload");
     expect(appKeyAction({ name: "t" })).toBe("toggle-view");
     expect(appKeyAction({ name: "z" })).toBeNull();
+  });
+
+  it("makes q the sole quit key — Esc maps to no action (issue 01)", () => {
+    expect(appKeyAction({ name: "escape" })).toBeNull();
+    expect(appKeyAction({ name: "q" })).toBe("quit");
   });
 });
 
