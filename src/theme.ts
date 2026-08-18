@@ -7,10 +7,10 @@
 // blocked red, frontier cyan, human orange. There is no central OpenTUI theme
 // object (research 02), so this module IS our theme.
 
-import { TextAttributes } from "@opentui/core";
+import { RGBA, SyntaxStyle, TextAttributes } from "@opentui/core";
 import type { ListState } from "./display.js";
 
-const surface = { bg: "#171b26", panel: "#1e2433", onAccent: "#11151c" };
+const surface = { bg: "#171b26", panel: "#1e2433", dim: RGBA.fromValues(0, 0, 0, 0.6), onAccent: "#11151c" };
 const border = { focused: "#7aa2f7", idle: "#3b4252" };
 const state = {
   done: "#06d6a0", // green — resolved / complete
@@ -74,4 +74,36 @@ export function stateColor(state: StateKey): string {
  */
 export function iconColor(state: StateKey, pulse: boolean): string {
   return state === "human" && pulse ? THEME.state.humanPulse : stateColor(state);
+}
+
+// The SyntaxStyle the detail pane's <markdown> element renders issue bodies
+// with. Built lazily (SyntaxStyle owns a native handle, so we make exactly one
+// for the app's lifetime) and derived from the theme tokens, so headings, bold,
+// lists, and inline code follow the palette — change a token → the rendered
+// markdown re-themes with it. Scopes are OpenTUI's documented markup grammar:
+// core 0.5.1 resolves the base scopes (markup.heading/strong/raw) and falls
+// back to them; the .N-suffixed forms render once a newer core consults them.
+let markdownStyle: SyntaxStyle | null = null;
+
+/** The app's shared markdown SyntaxStyle — create once, the pane reads it. */
+export function markdownSyntaxStyle(): SyntaxStyle {
+  if (!markdownStyle) {
+    markdownStyle = SyntaxStyle.fromStyles({
+      default: { fg: text.body },
+      "markup.heading": { fg: accent.brand, bold: true },
+      "markup.heading.1": { fg: text.title, bold: true },
+      "markup.strong": { fg: text.title, bold: true },
+      "markup.bold": { fg: text.title, bold: true },
+      "markup.italic": { fg: text.body, italic: true },
+      "markup.strikethrough": { fg: text.dim },
+      "markup.list": { fg: state.frontier },
+      "markup.quote": { fg: text.dim, italic: true },
+      "markup.raw": { fg: accent.id },
+      "markup.raw.block": { fg: accent.id },
+      "markup.link": { fg: accent.brand, underline: true },
+      "markup.link.url": { fg: accent.brand, underline: true },
+      "markup.link.label": { fg: text.title },
+    });
+  }
+  return markdownStyle;
 }

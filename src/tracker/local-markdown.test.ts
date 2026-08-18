@@ -12,6 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   LocalMarkdownProvider,
+  idEffort,
+  idNum,
+  idOrder,
   serializeIssue,
 } from "./local-markdown.js";
 import {
@@ -37,6 +40,28 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
+});
+
+describe("id facts — the adapter owns the id format (Card 2)", () => {
+  it("parses effort, num, and order from a repo-relative id", () => {
+    expect(idEffort(".scratch/herdr-frontier/issues/09-skeleton.md")).toBe("herdr-frontier");
+    expect(idEffort(".scratch/auth-spec/issues/22-token.md")).toBe("auth-spec");
+    expect(idNum(".scratch/e/issues/09-skeleton.md")).toBe("09");
+    expect(idOrder(".scratch/e/issues/09-skeleton.md")).toBe(9);
+  });
+  it("falls back to the filename stem for a no-number file (README sorts last)", () => {
+    expect(idNum(".scratch/e/issues/README.md")).toBe("README");
+    expect(idOrder(".scratch/e/issues/README.md")).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe("structuredTranscriptPath — the adapter owns the id↔path layout (Card 2)", () => {
+  it("maps an issue file to its transcripts/ sibling under the same effort", () => {
+    const p = new LocalMarkdownProvider({ repoRoot: "/repo" });
+    expect(p.structuredTranscriptPath(".scratch/herdr-frontier/issues/12-driver.md")).toBe(
+      ".scratch/herdr-frontier/transcripts/12-driver.md",
+    );
+  });
 });
 
 describe("LocalMarkdownProvider.listIssues", () => {
@@ -194,8 +219,12 @@ describe("LocalMarkdownProvider.readIssue", () => {
 
 describe("round-trip: serializeIssue → readIssue → listIssues", () => {
   it("writes an Issue in the adapter's canonical format and reads it back identically", async () => {
+    const originalId = ".scratch/herdr-frontier/issues/09-plugin.md";
     const original: Issue = {
-      id: ".scratch/herdr-frontier/issues/09-plugin.md",
+      id: originalId,
+      effort: idEffort(originalId),
+      num: idNum(originalId),
+      order: idOrder(originalId),
       title: "09 — Plugin skeleton",
       status: "open",
       type: "task",

@@ -5,20 +5,27 @@
 import { describe, it, expect } from "bun:test";
 import type { Issue } from "./tracker/provider.js";
 import { frontier, dispatch, autoSpawnable } from "./orchestrator.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
 const EFFORT = ".scratch/herdr-frontier/issues/";
 const mkId = (num: string, slug = "item") => `${EFFORT}${num}-${slug}.md`;
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: mkId("01"),
-  title: "01 — Item",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? mkId("01");
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — Item",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 describe("frontier", () => {
   const ids = [

@@ -17,6 +17,7 @@ import { HerdrClient, type HerdrRunner } from "./herdr-client.js";
 import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
 import { TranscriptIngester } from "./transcript.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 import {
   advanceRun,
   runScope,
@@ -40,18 +41,27 @@ const D = idOf("04");
 const NOW = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
 
-const mk = (over: Partial<Issue> = {}): IssueDetail => ({
-  id: A,
-  title: "01 — A",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  body: "",
-  comments: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): IssueDetail => {
+  const id = over.id ?? A;
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — A",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    body: "",
+    comments: [],
+    ...over,
+  };
+};
+
+/** The adapter's sibling-transcript layout, mirrored for the fake provider. */
+const transcriptPath = (id: string) => id.replace("/issues/", "/transcripts/");
 
 const emptyRun = (root: string): RunState => ({
   id: runIdFor(root),
@@ -144,6 +154,7 @@ function herdrHarness(): { client: HerdrClient; calls: string[][] } {
       const n = ++seq;
       return { code: 0, stdout: ok({ tab: { tab_id: `wZ:t${n}` }, root_pane: { pane_id: `wZ:p${n}` } }), stderr: "" };
     }
+    if (args[0] === "pane" && args[1] === "wait-output") return { code: 0, stdout: ok({ matched_line: "❯" }), stderr: "" };
     if (args[0] === "agent" && args[1] === "start") return { code: 0, stdout: ok({}), stderr: "" };
     if (args[0] === "agent" && args[1] === "prompt") return { code: 0, stdout: ok({}), stderr: "" };
     if (args[0] === "agent" && args[1] === "read") {
@@ -540,6 +551,58 @@ describe("RunController", () => {
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
   });
 
+  // --- running-runs accessor (issue 02) -------------------------------------
+
+  it("runningRuns is zero for an empty store", () => {
+    const h = harness([]);
+    expect(h.controller.runningRuns).toBe(0);
+  });
+
+  it("runningRuns counts only the currently running runs — stopped and completed never count", async () => {
+    const h = harness([mk({ id: A })]);
+    await h.controller.start(EFFORT);
+    expect(h.controller.runningRuns).toBe(1);
+
+    // A mixed store: terminal records sit beside the running one.
+    h.store.save({ ...emptyRun("done"), status: "completed", completedAt: NOW });
+    h.store.save({ ...emptyRun("stopped"), status: "stopped" });
+    expect(h.controller.runningRuns).toBe(1);
+
+    // Once the running run is stopped too, nothing counts.
+    await h.controller.stop(EFFORT);
+    expect(h.controller.runningRuns).toBe(0);
+  });
+
+  // The gate's live copy facts (issue 05): run-start names the controller's
+  // effective concurrency cap, run-stop the store's in-flight tally.
+  it("concurrency reflects the deps override, then the env key, then the default", () => {
+    expect(harness([], { concurrency: 5 }).controller.concurrency).toBe(5);
+    process.env[RUN_CONCURRENCY_KEY] = "2";
+    try {
+      expect(harness([]).controller.concurrency).toBe(2);
+      expect(harness([], { concurrency: 7 }).controller.concurrency).toBe(7); // deps beat env
+    } finally {
+      delete process.env[RUN_CONCURRENCY_KEY];
+    }
+    expect(harness([]).controller.concurrency).toBe(DEFAULT_RUN_CONCURRENCY);
+  });
+
+  it("inflightCount totals the dispatched members across running runs only", async () => {
+    const h = harness([mk({ id: A }), mk({ id: B }), mk({ id: C })], { concurrency: 3 });
+    await h.controller.start(EFFORT);
+    await h.controller.stepAll(); // dispatch A + B + C
+    expect(h.controller.inflightCount).toBe(3);
+
+    // A resolved member leaves the in-flight tally.
+    h.provider.setStatus(A, "resolved");
+    await h.controller.stepAll();
+    expect(h.controller.inflightCount).toBe(2);
+
+    // A terminal run (stopped) never counts — it releases nothing in-flight.
+    await h.controller.stop(EFFORT);
+    expect(h.controller.inflightCount).toBe(0);
+  });
+
   // --- transcript ingestion (issue 17) --------------------------------------
 
   it("ingests a finished member's output via the wired ingester — comment on a resolved issue", async () => {
@@ -548,6 +611,7 @@ describe("RunController", () => {
       client: herdrHarness().client,
       provider,
       repoRoot: "/repo",
+      transcriptPath,
       config: {},
     });
     const h = harness([], { provider, transcripts: ingester });
@@ -571,7 +635,7 @@ describe("RunController", () => {
       const claims = new ClaimRegistry();
       const { client } = herdrHarness();
       const coordinator = new DispatchCoordinator({ client, provider, profiles: DEFAULT_PROFILES, claims, cwd: "/repo" });
-      const ingester = new TranscriptIngester({ client, provider, repoRoot: "/repo", config: {} });
+      const ingester = new TranscriptIngester({ client, provider, repoRoot: "/repo", transcriptPath, config: {} });
       const first = new RunController({ provider, coordinator, store, transcripts: ingester });
       await first.start(EFFORT);
       await first.stepAll();
@@ -587,7 +651,7 @@ describe("RunController", () => {
     const claims2 = new ClaimRegistry();
     const { client: client2, calls: calls2 } = herdrHarness();
     const coordinator2 = new DispatchCoordinator({ client: client2, provider, profiles: DEFAULT_PROFILES, claims: claims2, cwd: "/repo" });
-    const ingester2 = new TranscriptIngester({ client: client2, provider, repoRoot: "/repo", config: {} });
+    const ingester2 = new TranscriptIngester({ client: client2, provider, repoRoot: "/repo", transcriptPath, config: {} });
     const second = new RunController({ provider, coordinator: coordinator2, store, transcripts: ingester2 });
     await second.stepAll();
     expect(provider.commented).toHaveLength(1);
@@ -599,7 +663,7 @@ describe("RunController", () => {
     const failingClient = new HerdrClient({
       runner: async () => ({ code: 1, stdout: "", stderr: "agent read boom" }),
     });
-    const ingester = new TranscriptIngester({ client: failingClient, provider, repoRoot: "/repo", config: {} });
+    const ingester = new TranscriptIngester({ client: failingClient, provider, repoRoot: "/repo", transcriptPath, config: {} });
     const h = harness([], { provider, transcripts: ingester });
     await h.controller.start(EFFORT);
     await h.controller.stepAll();

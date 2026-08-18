@@ -1,0 +1,17 @@
+[profiles.grilling]
+kind = "opencode2"
+
+[profiles.research]
+kind = "opencode2"
+
+[profiles.implement]
+kind = "opencode2"
+
+[profiles.prototype]
+kind = "opencode2"
+
+[default_profile]
+kind = "opencode2"
+
+[transcripts]
+opencode = "sed -n '1,3p'"

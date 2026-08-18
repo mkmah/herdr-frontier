@@ -9,7 +9,7 @@
 // the component is a thin render layer over these functions.
 
 import type { Issue } from "./tracker/provider.js";
-import { issueNum, issueNumber } from "./logic.js";
+import { issueLabel, refLabel } from "./logic.js";
 
 /** One node in the forward forest. */
 export interface TreeNode {
@@ -26,7 +26,7 @@ export interface TreeNode {
  * links are cut at the back-edge so a stale graph can't recurse forever.
  */
 export function buildForest(pool: Issue[]): TreeNode[] {
-  const byNumber = (a: Issue, b: Issue) => issueNumber(a.id) - issueNumber(b.id) || a.id.localeCompare(b.id);
+  const byNumber = (a: Issue, b: Issue) => a.order - b.order || a.id.localeCompare(b.id);
   const byId = new Map(pool.map((i) => [i.id, i]));
   // A blocker ref may be a full id or the issue's numeric prefix ("05"); both
   // resolve within the pool (a single effort, so numbers are unique there) —
@@ -35,9 +35,9 @@ export function buildForest(pool: Issue[]): TreeNode[] {
   // prefix collision.
   const byNum = new Map<string, Issue>();
   for (const i of [...pool].sort(byNumber)) {
-    if (!byNum.has(issueNum(i.id))) byNum.set(issueNum(i.id), i);
+    if (!byNum.has(issueLabel(i))) byNum.set(issueLabel(i), i);
   }
-  const resolve = (ref: string): Issue | undefined => byId.get(ref) ?? byNum.get(issueNum(ref));
+  const resolve = (ref: string): Issue | undefined => byId.get(ref) ?? byNum.get(refLabel(ref));
   const roots = pool.filter((i) => !i.blockedBy.some((b) => resolve(b))).sort(byNumber);
   const expand = (issue: Issue, ancestors: ReadonlySet<string>): TreeNode => {
     const children = pool

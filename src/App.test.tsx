@@ -13,12 +13,11 @@
 
 import { describe, it, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App, appKeyAction } from "./App.js";
+import { App } from "./App.js";
+import { ShellController } from "./shell.js";
 import {
   buildRows,
-  issueNum,
   moveCursor,
-  effortOf,
   rowTitleBudget,
   sortIssues,
   triageOf,
@@ -26,18 +25,27 @@ import {
   type Row,
 } from "./logic.js";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
+import type { DispatchCoordinator } from "./dispatch.js";
 import type { RunController } from "./run.js";
+import type { ConfirmDialog } from "./confirm.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/e/issues/01-x.md",
-  title: "01 — X",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? ".scratch/e/issues/01-x.md";
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — X",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 const noopProvider: TrackerProvider = {
   listIssues: async () => [],
@@ -50,36 +58,13 @@ const noopProvider: TrackerProvider = {
   addBlocking: async () => { throw new Error("noop"); },
 };
 
-describe("logic: effortOf / issueNum", () => {
-  it("extracts the effort dir and numeric id from a repo-relative path", () => {
-    expect(effortOf(".scratch/herdr-frontier/issues/09-skeleton.md")).toBe("herdr-frontier");
-    expect(effortOf(".scratch/auth-spec/issues/22-token.md")).toBe("auth-spec");
-    expect(issueNum(".scratch/e/issues/09-skeleton.md")).toBe("#09");
-    expect(issueNum(".scratch/e/issues/README.md")).toBe("#README");
-  });
-});
-
-describe("appKeyAction — the key bindings (issue 14 stop)", () => {
-  it("maps s to start and shift-s (both parse forms) to stop — never a toggle", () => {
-    expect(appKeyAction({ name: "s", shift: false })).toBe("run-start");
-    expect(appKeyAction({ name: "s", shift: true })).toBe("run-stop"); // raw terminal
-    expect(appKeyAction({ name: "S", shift: true })).toBe("run-stop"); // kitty protocol
-  });
-
-  it("keeps the other bindings stable", () => {
-    expect(appKeyAction({ name: "q" })).toBe("quit");
-    expect(appKeyAction({ name: "escape" })).toBe("quit");
-    expect(appKeyAction({ name: "tab" })).toBe("focus");
-    expect(appKeyAction({ name: "j" })).toBe("down");
-    expect(appKeyAction({ name: "down" })).toBe("down");
-    expect(appKeyAction({ name: "k" })).toBe("up");
-    expect(appKeyAction({ name: "up" })).toBe("up");
-    expect(appKeyAction({ name: "return" })).toBe("dispatch");
-    expect(appKeyAction({ name: "x" })).toBe("release");
-    expect(appKeyAction({ name: "r" })).toBe("reload");
-    expect(appKeyAction({ name: "t" })).toBe("toggle-view");
-    expect(appKeyAction({ name: "z" })).toBeNull();
-  });
+// The render smoke never triggers a verb or a load, so a shell with inert deps
+// (the App test harness skips onMount — nothing ever calls them) is enough.
+const noopShell = new ShellController({
+  provider: noopProvider,
+  coordinator: {} as unknown as DispatchCoordinator,
+  runController: { load: () => null } as unknown as RunController,
+  confirmPolicy: {},
 });
 
 describe("logic: triageOf", () => {
@@ -211,7 +196,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
 
     const setup = await testRender(() => (
       <App
-        provider={noopProvider}
+        shell={noopShell}
         initialIssues={[first, second]}
         initialDetail={detail}
       />
@@ -237,8 +222,39 @@ describe("App (initial render smoke — two-pane shell)", () => {
     setup.renderer.destroy();
   });
 
+  // The detail body is the Issue's whole markdown document — rendered through
+  // OpenTUI's <markdown> element under the header rows, so headings/lists/bold
+  // paint structurally and the syntax markers are concealed (the pane shows the
+  // work, not the .md). Same render path as the tree view's detail pane (the
+  // DetailPane/DetailContent split is shared), so one smoke covers both views.
+  it("renders the detail body as markdown with concealed syntax markers", async () => {
+    const issue = mk();
+    const detail: IssueDetail = {
+      ...issue,
+      body: "# Blockers\n\nRewrite the `driver`. **Boldly** ship it.\n\n- one\n- two",
+      comments: [],
+    };
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // markdown structure paints — heading, inline code, emphasis, list items
+    expect(frame).toContain("Blockers");
+    expect(frame).toContain("Rewrite the driver.");
+    expect(frame).toContain("Boldly ship it.");
+    expect(frame).toContain("- one");
+    expect(frame).toContain("- two");
+    // the markers themselves are concealed — no literal .md syntax in the frame
+    expect(frame).not.toContain("# Blockers");
+    expect(frame).not.toContain("**");
+    expect(frame).not.toContain("`driver`");
+    setup.renderer.destroy();
+  });
+
   it("renders the empty state when initialIssues is empty", async () => {
-    const setup = await testRender(() => <App provider={noopProvider} initialIssues={[]} />);
+    const setup = await testRender(() => <App shell={noopShell} initialIssues={[]} />);
     await setup.flush();
     expect(setup.captureCharFrame()).toContain("no issues");
     setup.renderer.destroy();
@@ -257,7 +273,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(() => (
-      <App provider={noopProvider} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
+      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
     ));
     await setup.flush();
     const frame = setup.captureCharFrame();
@@ -275,7 +291,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const tall = mk({ id: ".scratch/herdr-frontier/issues/01-x.md", title: "01 — X" });
     const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[tall]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} />,
       { width: 100, height: 12 },
     );
     await setup.flush();
@@ -295,7 +311,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...impl, body: "Build the driver.", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[impl]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -311,7 +327,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const human = mk({ id: ".scratch/herdr-frontier/issues/13-human.md", labels: ["ready-for-human"] });
     const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[human]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -327,7 +343,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   it("advertises the x stop+reopen binding in the footer", async () => {
     const issue = mk();
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[issue]} />,
+      () => <App shell={noopShell} initialIssues={[issue]} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -354,13 +370,18 @@ describe("App (initial render smoke — two-pane shell)", () => {
         ],
       }),
     } as unknown as RunController;
+    const runShell = new ShellController({
+      provider: noopProvider,
+      coordinator: {} as unknown as DispatchCoordinator,
+      runController,
+      confirmPolicy: {},
+    });
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={runShell}
           initialIssues={[issue]}
           initialDetail={detail}
-          runController={runController}
         />
       ),
       { width: 120, height: 20 },
@@ -401,7 +422,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={noopShell}
           initialIssues={[root, child]}
           initialDetail={detail}
           initialView="tree"
@@ -434,7 +455,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // connectors must not leak into it (the tree is a toggleable secondary view).
   it("keeps the tree out of the default (list) view", async () => {
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[mk()]} />,
+      () => <App shell={noopShell} initialIssues={[mk()]} />,
       { width: 100, height: 20 },
     );
     await setup.flush();
@@ -457,7 +478,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...long, body: "", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[long]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[long]} initialDetail={detail} />,
       { width: 100, height: 16 },
     );
     await setup.flush();
@@ -484,7 +505,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={noopShell}
           initialIssues={[root, child]}
           initialDetail={detail}
           initialView="tree"
@@ -496,6 +517,72 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const frame = setup.captureCharFrame();
     expect(frame).toContain("…");
     expect(frame).not.toContain("far too long");
+    setup.renderer.destroy();
+  });
+
+  // Confirmation-gate 05 (Seam 4): the one-shot renderer paints the confirmation
+  // overlay over the shell from the initialModal seam — the rulebook's shape
+  // (title, context line, body) plus the `[ Cancel  Confirm ]` row with Confirm
+  // pre-focused (the `▶` caret marks the focused button in the captured frame).
+  // The dim cover is translucent, so the shell stays legible under it (the
+  // overlay layers above, not in place of, the two panes). Keyboard interaction
+  // (move/confirm/cancel + the dead-key swallow) and the policy/structure skips
+  // live in the pure rulebook tests (Seam 1), not here — the renderer is
+  // one-shot.
+  it("paints the confirmation overlay over the shell via the initialModal seam", async () => {
+    const issue = mk({
+      id: ".scratch/herdr-frontier/issues/05-confirm.md",
+      title: "05 — Confirm rulebook",
+    });
+    const detail: IssueDetail = { ...issue, body: "", comments: [] };
+    const modal: ConfirmDialog = {
+      trigger: "dispatch",
+      title: "Dispatch #05?",
+      context: "#05 — Confirm rulebook",
+      body: "Claims #05 and starts an agent in a new pane — work begins now.",
+      cancelLabel: "Cancel",
+      confirmLabel: "Confirm",
+      focusedButton: "confirm",
+    };
+    const setup = await testRender(
+      () => (
+        <App
+          shell={noopShell}
+          initialIssues={[issue]}
+          initialDetail={detail}
+          initialModal={modal}
+        />
+      ),
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the dim cover is translucent — the two-pane shell stays legible under the
+    // overlay (it layers above, not in place of, the panes)
+    expect(frame).toContain("◆ herdr-frontier");
+    expect(frame).toContain("Issues");
+    // the overlay's shape: title, context line, then the body
+    expect(frame).toContain("Dispatch #05?");
+    expect(frame).toContain("#05 — Confirm rulebook");
+    expect(frame).toContain("Claims #05");
+    expect(frame).toContain("work begins now.");
+    // both buttons, Confirm pre-focused — the ▶ caret marks the focused button
+    expect(frame).toContain("[ Cancel ]");
+    expect(frame).toContain("▶ Confirm");
+    setup.renderer.destroy();
+  });
+
+  // Regression for the same seam: no modal prop → no overlay. A plain shell
+  // render must not sprout a stray dialog (the modal key is null).
+  it("paints no overlay when no dialog is open", async () => {
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[mk()]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("▶ Confirm");
+    expect(frame).not.toContain("Dispatch #");
     setup.renderer.destroy();
   });
 });

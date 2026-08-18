@@ -18,7 +18,6 @@
 import { join } from "node:path";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import type { Issue, TrackerProvider } from "./tracker/provider.js";
-import { effortOf, issueNumber } from "./logic.js";
 import { autoSpawnable, frontier } from "./orchestrator.js";
 import { sessionNameFor, type DispatchCoordinator } from "./dispatch.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
@@ -116,7 +115,7 @@ function sanitize(s: string): string {
 
 /** The Issues a run-root's graph walks: every Issue in the root's effort. */
 export function runScope(issues: Issue[], root: string): Issue[] {
-  return issues.filter((i) => effortOf(i.id) === root);
+  return issues.filter((i) => i.effort === root);
 }
 
 /** True when every tracked member is terminal — the run has nothing left to do. */
@@ -184,7 +183,7 @@ export function advanceRun(run: RunState, allIssues: Issue[], now: number = Date
   const eligible = next.issues
     .filter((m) => m.status === "pending")
     .map((m) => byId.get(m.id)!)
-    .sort((a, b) => issueNumber(a.id) - issueNumber(b.id) || a.id.localeCompare(b.id));
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 
   if (runCompleted(next)) {
     next.status = "completed";
@@ -306,6 +305,34 @@ export class RunController {
     return this.deps.store.load(root);
   }
 
+  /** The store's currently running runs — the subset every run-wide verb
+   *  (stop-all / step-all) works on, and the confirmation gate's skip fact. */
+  private running(): RunState[] {
+    return this.deps.store.all().filter((r) => r.status === "running");
+  }
+
+  /** How many runs are currently running (confirmation gate 02 — run-stop's
+   *  structural-skip fact): zero for an empty store, and only `running` runs
+   *  count — stopped and completed ones never do. Read-only, against the
+   *  controller's store. */
+  get runningRuns(): number {
+    return this.running().length;
+  }
+
+  /** The per-run concurrency cap a run started through this controller would
+   *  use (the run-start dialog's copy names it): the deps override, else the
+   *  {@link RUN_CONCURRENCY_KEY} env key, else the default. Read-only. */
+  get concurrency(): number {
+    return this.deps.concurrency ?? concurrencyFromEnv() ?? DEFAULT_RUN_CONCURRENCY;
+  }
+
+  /** The total in-flight (dispatched) member count across all running runs —
+   *  the run-stop dialog's copy names it. Read-only, against the store;
+   *  stopped and completed runs never count (they release nothing). */
+  get inflightCount(): number {
+    return this.running().reduce((n, r) => n + r.issues.filter((m) => m.status === "dispatched").length, 0);
+  }
+
   /**
    * Start a run bound to a run-root: snapshot its graph and persist it. While
    * a run is already running this is idempotent (returns it) — a rehydrated
@@ -319,7 +346,9 @@ export class RunController {
       id: runIdFor(root),
       root,
       status: "running",
-      concurrency: this.deps.concurrency ?? concurrencyFromEnv() ?? DEFAULT_RUN_CONCURRENCY,
+      // The controller's effective cap — the same read-only source the
+      // run-start confirmation dialog's copy names, so the two can't drift.
+      concurrency: this.concurrency,
       startedAt: Date.now(),
       issues: [],
     };
@@ -342,11 +371,9 @@ export class RunController {
    *  stop-all is the reliable "end the auto-dispatch" control. */
   async stopAll(): Promise<number> {
     let stopped = 0;
-    for (const run of this.deps.store.all()) {
-      if (run.status === "running") {
-        await this.stop(run.root);
-        stopped += 1;
-      }
+    for (const run of this.running()) {
+      await this.stop(run.root);
+      stopped += 1;
     }
     return stopped;
   }
@@ -358,7 +385,7 @@ export class RunController {
    *  did nothing". Release is best-effort per pane — a stuck pane is an orphan
    *  the user can close, but it never blocks the other releases or the stop. */
   async stopAllAndRelease(): Promise<number> {
-    const runs = this.deps.store.all().filter((r) => r.status === "running");
+    const runs = this.running();
     for (const run of runs) {
       await this.stop(run.root);
       for (const member of run.issues) {
@@ -382,7 +409,7 @@ export class RunController {
    * the poll. Returns the number of running runs stepped.
    */
   async stepAll(fresh?: Issue[]): Promise<number> {
-    const runs = this.deps.store.all().filter((r) => r.status === "running");
+    const runs = this.running();
     if (runs.length === 0) return 0;
     if (Date.now() - this.lastPruneAt > PRUNE_INTERVAL_MS) {
       this.deps.store.prune();
@@ -405,6 +432,10 @@ export class RunController {
     if (!run || run.status !== "running") return;
 
     const { run: next, eligible } = advanceRun(run, all);
+    // Members are derived from the fresh snapshot, so this map resolves each
+    // member to its record's adapter-owned facts (the session name's
+    // `<effort>-<num>` shape) without parsing the id (Card 2).
+    const byId = new Map(all.map((i) => [i.id, i]));
 
     for (const issue of eligible) {
       // The concurrency cap: never more than `next.concurrency` members in
@@ -443,11 +474,13 @@ export class RunController {
     if (this.deps.transcripts) {
       for (const member of next.issues) {
         if (member.status !== "resolved" || member.ingested) continue;
+        const issue = byId.get(member.id);
+        if (!issue) continue; // the issue left the snapshot — nothing to ingest
         try {
           await this.deps.transcripts.ingest({
             id: member.id,
             kind: member.kind ?? DEFAULT_PROFILES.default_profile.kind,
-            agentName: sessionNameFor(member.id),
+            agentName: sessionNameFor(issue),
           });
           member.ingested = true;
           member.ingestError = undefined;

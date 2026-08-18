@@ -12,15 +12,22 @@
 //   [profiles.prototype] kind = "pi"
 //   [default_profile]    kind = "opencode"
 //   [transcripts]        opencode = "sed -n '1,3p'"    # agent kind → extraction command
+//   [confirm]            dispatch  = false             # false suppresses that action's gate
+//                       release   = false             # true / absent keep it (default: all confirm)
+//                       run_start = false
+//                       run_stop  = false
 //
 // Model lives raw in `args` (1:1 with herdr's `--` passthrough) — the plugin
 // never parses model semantics. A missing/malformed file is loud (throws on
-// parse) so a user typo isn't silently swallowed; a missing file is fine.
+// parse) so a user typo isn't silently swallowed; a missing file is fine. A
+// non-boolean `[confirm]` value is loud the same way (confirmation-gate 04) —
+// a typo'd value is never silently dropped.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_PROFILES, type AgentProfile, type ProfileKey, type ProfilesConfig } from "./profiles.js";
+import type { ConfirmPolicy, ConfirmationTrigger } from "./confirm.js";
 
 /** The config filename in each layer's dir. */
 export const CONFIG_FILE = "herdr-frontier.toml";
@@ -35,6 +42,9 @@ export type TranscriptsConfig = Record<string, string>;
 export interface PluginConfig {
   profiles: ProfilesConfig;
   transcripts: TranscriptsConfig;
+  /** The confirmation-gate bypass: `false` per trigger suppresses that action's
+   *  gate; absent and `true` keep it, so an empty config leaves every gate on. */
+  confirm: ConfirmPolicy;
 }
 
 export interface LoadConfigOptions {
@@ -66,6 +76,10 @@ export interface RawConfig {
   profiles?: Record<string, RawProfile>;
   default_profile?: RawProfile;
   transcripts?: Record<string, unknown>;
+  /** The `[confirm]` table: the four Confirmable actions → a boolean (`false`
+   *  suppresses that action's gate). Unvalidated here — normalization throws
+   *  on a non-boolean value (confirmation-gate 04). */
+  confirm?: Record<string, unknown>;
 }
 export interface RawProfile {
   kind?: unknown;
@@ -101,6 +115,36 @@ function normalizeTranscripts(raw: Record<string, unknown> | undefined): Transcr
   return out;
 }
 
+/** The `[confirm]` table's TOML key for each trigger — `run_start`/`run_stop`
+ *  are snake_case in the config, the trigger vocabulary (issue 03) hyphenated. */
+const CONFIRM_TABLE_KEYS: Record<ConfirmationTrigger, string> = {
+  dispatch: "dispatch",
+  release: "release",
+  "run-start": "run_start",
+  "run-stop": "run_stop",
+};
+
+/** Normalize one layer's `[confirm]` table into the policy. Only a boolean is
+ *  valid: `false` suppresses that trigger's gate, `true` records the explicit
+ *  keep (needed so the merge can override a lower layer's `false`). A
+ *  non-boolean value is dropped loudly — the module's malformed-file idiom, a
+ *  user typo is never silently swallowed: the whole load throws naming the key
+ *  (confirmation-gate 04). Keys absent from the table contribute nothing. */
+function normalizeConfirm(raw: Record<string, unknown> | undefined): ConfirmPolicy {
+  const out: ConfirmPolicy = {};
+  if (!raw) return out;
+  for (const trigger of Object.keys(CONFIRM_TABLE_KEYS) as ConfirmationTrigger[]) {
+    const key = CONFIRM_TABLE_KEYS[trigger];
+    if (!(key in raw)) continue;
+    const value = raw[key];
+    if (typeof value !== "boolean") {
+      throw new Error(`[confirm] ${key} must be a boolean (true/false), got ${JSON.stringify(value)}`);
+    }
+    out[trigger] = value;
+  }
+  return out;
+}
+
 /** The pure repo-over-user merge. `user` and `repo` are the raw parsed layers
  *  (null = absent); every key resolves repo-first, then user, then defaults. */
 export function mergeConfigs(user: RawConfig | null, repo: RawConfig | null): PluginConfig {
@@ -116,5 +160,11 @@ export function mergeConfigs(user: RawConfig | null, repo: RawConfig | null): Pl
     ...normalizeTranscripts(user?.transcripts),
     ...normalizeTranscripts(repo?.transcripts),
   };
-  return { profiles: { profiles, default_profile: defaultProfile }, transcripts };
+  // `[confirm]` merges the same way — repo over user per key; a key absent from
+  // both layers stays absent (the "confirm" default, every gate on).
+  const confirm = {
+    ...normalizeConfirm(user?.confirm),
+    ...normalizeConfirm(repo?.confirm),
+  };
+  return { profiles: { profiles, default_profile: defaultProfile }, transcripts, confirm };
 }

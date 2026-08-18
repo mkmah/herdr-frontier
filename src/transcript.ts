@@ -89,13 +89,8 @@ export function extractResult(text: string): string | null {
 
 /**
  * Where a richer structured transcript lives for an issue: a sibling of the
- * issue file under the same effort's `transcripts/` dir (the agent's brief
- * tells it to write there). `.scratch/<effort>/issues/NN-slug.md` →
- * `.scratch/<effort>/transcripts/NN-slug.md`.
+ * issue file under the same effort's `transcripts/` dir.
  */
-export function structuredTranscriptPath(id: string): string {
-  return id.replace("/issues/", "/transcripts/");
-}
 
 /** One run member the ingester acts on. */
 export interface IngestMember {
@@ -115,6 +110,10 @@ export interface TranscriptIngesterDeps {
   client: HerdrClient;
   provider: TrackerProvider;
   repoRoot: string;
+  /** The repo-relative path of an issue's structured transcript — read from the
+   *  adapter (Card 2), which owns the id↔path layout; the composition root
+   *  wires `provider.structuredTranscriptPath`. */
+  transcriptPath: (id: string) => string;
   /** The merged `transcripts:` config: agent kind → extraction command. */
   config: TranscriptsConfig;
   /** The `agent read --lines` window (default {@link DEFAULT_READ_LINES}). */
@@ -176,7 +175,7 @@ export class TranscriptIngester {
   /** The structured transcript file under `.scratch/`, when the agent wrote one. */
   private readStructured(id: string): string | null {
     const read = this.deps.readFile ?? defaultReadFile;
-    const raw = read(join(this.deps.repoRoot, ...structuredTranscriptPath(id).split("/")));
+    const raw = read(join(this.deps.repoRoot, ...this.deps.transcriptPath(id).split("/")));
     if (raw == null) return null;
     const text = raw.trim();
     return text === "" ? null : text;

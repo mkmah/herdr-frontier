@@ -20,6 +20,18 @@ export type IssueType = "research" | "prototype" | "grilling" | "task";
  */
 export interface Issue {
   id: string;
+  /** The effort directory this issue belongs to — the grouping key the list's
+   *  run-root headers are built from. Adapter-owned: the tracker parses its own
+   *  id format once and fills this; policy never parses the id (ADR-0001). */
+  effort: string;
+  /** The issue's short-id label WITHOUT the `#` (the filename's numeric prefix,
+   *  e.g. `"09"`, else the filename stem) — the `#id` rows show and the key
+   *  blocker refs match against. Adapter-owned. */
+  num: string;
+  /** The numeric sort order — the numeric prefix of the id's filename as a
+   *  number, or `Number.MAX_SAFE_INTEGER` when there is none (sorts last).
+   *  The frontier's stable first-by-number order. Adapter-owned. */
+  order: number;
   title: string;
   status: IssueStatus;
   type: IssueType;

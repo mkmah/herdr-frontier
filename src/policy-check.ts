@@ -8,7 +8,7 @@
 
 import { LocalMarkdownProvider } from "./tracker/local-markdown.js";
 import { frontier, dispatch, autoSpawnable } from "./orchestrator.js";
-import { issueNum } from "./logic.js";
+import { issueLabel } from "./logic.js";
 import type { Issue } from "./tracker/provider.js";
 
 const provider = new LocalMarkdownProvider({ repoRoot: process.cwd() });
@@ -31,12 +31,12 @@ const outcome = (i: Issue) => {
 
 console.log("\n=== FRONTIER (open ∧ unclaimed ∧ all-blockers-resolved, by number) ===");
 if (frontier(issues).length === 0) console.log("  (none)");
-for (const i of frontier(issues)) console.log(`  ${issueNum(i.id)}  ${i.title}`);
+for (const i of frontier(issues)) console.log(`  ${issueLabel(i)}  ${i.title}`);
 
 console.log("\n=== DISPATCH, per issue ===");
 for (const i of [...issues].sort((a, b) => a.id.localeCompare(b.id))) {
   console.log(
-    `  ${issueNum(i.id).padEnd(4)} ${labelOf(i).padEnd(16)} ${outcome(i).padEnd(48)} auto=${autoSpawnable(i) ? "YES" : "no"}`,
+    `  ${issueLabel(i).padEnd(4)} ${labelOf(i).padEnd(16)} ${outcome(i).padEnd(48)} auto=${autoSpawnable(i) ? "YES" : "no"}`,
   );
 }
 console.log(`\n${issues.length} issues read from .scratch/`);
