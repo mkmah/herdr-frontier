@@ -22,7 +22,7 @@ You need [herdr](https://herdr.dev) 0.8.0 or later. Bun is required only at inst
 (the plugin compiles itself on your machine); the resulting binary runs with no Bun.
 
 ```bash
-herdr plugin install mkmah/herdr-frontier --ref v0.2.0
+herdr plugin install mkmah/herdr-frontier --ref v0.3.0
 ```
 
 > The `--ref` pins the checkout to a git tag, so an install is always a known-good
@@ -34,7 +34,7 @@ herdr plugin install mkmah/herdr-frontier --ref v0.2.0
 >
 > ```bash
 > herdr plugin uninstall herdr-frontier
-> herdr plugin install mkmah/herdr-frontier --ref v0.2.0
+> herdr plugin install mkmah/herdr-frontier --ref v0.3.0
 > ```
 
 In any herdr workspace that hosts issues under its own `.scratch/<feature>/issues/`, open
