@@ -67,6 +67,25 @@ const noopShell = new ShellController({
   confirmPolicy: {},
 });
 
+// The detail body paints only once OpenTUI's tree-sitter markdown highlight
+// resolves — a worker round-trip that can land a frame (or a few) after the
+// mount settles, especially on a cold or load-heavy worker. A single
+// flush()/captureCharFrame() must not read that gap as "the body never
+// painted", so the markdown assertions retry capture until a body marker
+// appears and run against that settled frame.
+async function captureSettledFrame(
+  setup: Awaited<ReturnType<typeof testRender>>,
+  marker: (frame: string) => boolean,
+): Promise<string> {
+  let frame = setup.captureCharFrame();
+  for (let attempt = 0; attempt < 50 && !marker(frame); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await setup.flush();
+    frame = setup.captureCharFrame();
+  }
+  return frame;
+}
+
 describe("logic: triageOf", () => {
   it("returns the first non-wayfinder label, defaulting to needs-triage", () => {
     expect(triageOf(mk({ labels: ["ready-for-agent", "wayfinder:task"] }))).toBe("ready-for-agent");
@@ -201,8 +220,11 @@ describe("App (initial render smoke — two-pane shell)", () => {
         initialDetail={detail}
       />
     ));
-    await setup.flush();
-    const frame = setup.captureCharFrame();
+    // markdown body settles after its highlight round-trip — wait for it
+    const frame = await captureSettledFrame(
+      setup,
+      (f) => f.includes("Build the primary shell"),
+    );
 
     // list pane: grouped rows, #id, truncated titles
     expect(frame).toContain("herdr-frontier");
@@ -238,8 +260,8 @@ describe("App (initial render smoke — two-pane shell)", () => {
       () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
-    await setup.flush();
-    const frame = setup.captureCharFrame();
+    // markdown body settles after its highlight round-trip — wait for it
+    const frame = await captureSettledFrame(setup, (f) => f.includes("Blockers"));
     // markdown structure paints — heading, inline code, emphasis, list items
     expect(frame).toContain("Blockers");
     expect(frame).toContain("Rewrite the driver.");
@@ -430,8 +452,11 @@ describe("App (initial render smoke — two-pane shell)", () => {
       ),
       { width: 100, height: 44 },
     );
-    await setup.flush();
-    const frame = setup.captureCharFrame();
+    // markdown body settles after its highlight round-trip — wait for it
+    const frame = await captureSettledFrame(
+      setup,
+      (f) => f.includes("Root issue body for the tree detail pane."),
+    );
     // tree pane (top) — title + a forward-forest connector + lean row fields
     expect(frame).toContain("Dependencies");
     expect(frame).toContain("└─");
