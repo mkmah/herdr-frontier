@@ -10,7 +10,6 @@ import {
   cycleFocus,
   humanizeAge,
   iconFor,
-  isHumanTurn,
   listStateOf,
   trackClick,
   wheelDelta,
@@ -18,18 +17,25 @@ import {
   type ListState,
 } from "./display.js";
 import { iconColor, stateColor, triageColor } from "./theme.js";
-import { blockerResolved } from "./logic.js";
+import { attention, blockerResolved } from "./logic.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/herdr-frontier/issues/10-shell.md",
-  title: "10 — Shell",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? ".scratch/herdr-frontier/issues/10-shell.md";
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "10 — Shell",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 describe("listStateOf", () => {
   const resolved = (id: string) => id === ".scratch/e/issues/05-iface.md" || id === "05";
@@ -61,16 +67,21 @@ describe("listStateOf", () => {
   });
 });
 
-describe("isHumanTurn", () => {
-  it("is true for the three human labels and false for agent/wontfix", () => {
-    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }))).toBe(true);
-    expect(isHumanTurn(mk({ labels: ["needs-info"] }))).toBe(true);
-    expect(isHumanTurn(mk({ labels: ["needs-triage"] }))).toBe(true);
-    expect(isHumanTurn(mk({ labels: ["ready-for-agent"] }))).toBe(false);
-    expect(isHumanTurn(mk({ labels: ["wontfix"] }))).toBe(false);
+describe("attention — the shared human-turn predicate (Card 4)", () => {
+  it("marks the three human labels and clears agent/wontfix", () => {
+    expect(attention(mk({ labels: ["ready-for-human"] }))).not.toBeNull();
+    expect(attention(mk({ labels: ["needs-info"] }))).not.toBeNull();
+    expect(attention(mk({ labels: ["needs-triage"] }))).not.toBeNull();
+    expect(attention(mk({ labels: ["ready-for-agent"] }))).toBeNull();
+    expect(attention(mk({ labels: ["wontfix"] }))).toBeNull();
   });
-  it("defaults an unlabeled issue to needs-triage → human turn", () => {
-    expect(isHumanTurn(mk({ labels: ["wayfinder:research"] }))).toBe(true);
+  it("defaults an unlabeled issue to needs-triage → human attention", () => {
+    expect(attention(mk({ labels: ["wayfinder:research"] }))).not.toBeNull();
+  });
+  it("splits the kinds: ready-for-human/blocked = notify, needs-info/-triage = marker only", () => {
+    expect(attention(mk({ labels: ["ready-for-human"] }))).toBe("notify");
+    expect(attention(mk({ labels: ["needs-info"] }))).toBe("human");
+    expect(attention(mk({ labels: ["needs-triage"] }))).toBe("human");
   });
 });
 
@@ -103,7 +114,7 @@ describe("iconFor precedence: done > human > running > blocked > frontier", () =
 // Issue 13: agent-blocked is a human-turn (CONTEXT.md: Attention lane — label
 // state PLUS agent state). A dispatched agent that went `blocked` shows the same
 // pulsing ☻ as a `ready-for-human` issue — it needs a human now.
-describe("iconFor / isHumanTurn: agent-blocked attention (issue 13)", () => {
+describe("iconFor / attention: agent-blocked attention (issue 13)", () => {
   const resolved = () => false;
   it("shows ☻ for a claimed issue whose dispatched agent is blocked", () => {
     expect(iconFor(mk({ status: "claimed" }), resolved, "blocked").glyph).toBe("☻");
@@ -123,18 +134,17 @@ describe("iconFor / isHumanTurn: agent-blocked attention (issue 13)", () => {
   it("a label human-turn still shows ☻ regardless of agent status", () => {
     expect(iconFor(mk({ status: "claimed", labels: ["ready-for-human"] }), resolved, "working").glyph).toBe("☻");
   });
-  it("isHumanTurn is true for an agent-blocked claimed issue", () => {
-    expect(isHumanTurn(mk({ status: "claimed" }), "blocked")).toBe(true);
-    expect(isHumanTurn(mk({ status: "claimed" }), "working")).toBe(false);
+  it("attention is notify for an agent-blocked claimed issue", () => {
+    expect(attention(mk({ status: "claimed" }), "blocked")).toBe("notify");
+    expect(attention(mk({ status: "claimed" }), "working")).toBeNull();
   });
-  it("isHumanTurn stays true for a label human-turn regardless of agent status", () => {
-    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }), "working")).toBe(true);
-    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }), undefined)).toBe(true);
+  it("attention stays notify for a ready-for-human label regardless of agent status", () => {
+    expect(attention(mk({ labels: ["ready-for-human"] }), "working")).toBe("notify");
+    expect(attention(mk({ labels: ["ready-for-human"] }), undefined)).toBe("notify");
   });
-  it("isHumanTurn without agent status matches the old behavior (label only)", () => {
-    // Backward-compat: the optional second arg keeps every existing call site.
-    expect(isHumanTurn(mk({ labels: ["ready-for-agent"] }))).toBe(false);
-    expect(isHumanTurn(mk({ labels: ["ready-for-human"] }))).toBe(true);
+  it("attention without agent status matches the label-only rule", () => {
+    expect(attention(mk({ labels: ["ready-for-agent"] }))).toBeNull();
+    expect(attention(mk({ labels: ["ready-for-human"] }))).toBe("notify");
   });
 });
 

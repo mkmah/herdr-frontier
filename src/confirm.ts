@@ -8,7 +8,7 @@
 // subject (issue id + title, run-root + concurrency, in-flight tally) filled
 // from context.
 
-import { issueNum } from "./logic.js";
+import { issueLabel } from "./logic.js";
 
 /** The four Confirmable actions (CONTEXT.md): the actions a confirmation gate
  *  guards before they execute — dispatch, release, run-start, run-stop. This is
@@ -42,8 +42,11 @@ export interface ConfirmationCtx {
   /** Runs currently running (run-stop's structural skip: a stop-all with zero
    *  running runs is a no-op). */
   runningRuns: number;
-  /** The selected issue's id — its `#id` names the dispatch/release subject. */
-  issueId: string;
+  /** The selected issue's `#id` label — the copy names the dispatch/release
+   *  subject. Carried as the label (not the raw id) so the dialog never
+   *  surfaces/parses the id itself (Card 2); the caller derives it from the
+   *  record's adapter-owned `num`. */
+  issueLabel: string;
   /** The selected issue's title — the second half of the context line. */
   issueTitle: string;
   /** The run-root effort a run-start would walk (its context line). */
@@ -130,7 +133,7 @@ export function confirmationFor(
 export function confirmDialogFor(trigger: ConfirmationTrigger, ctx: ConfirmationCtx): ConfirmDialog {
   switch (trigger) {
     case "dispatch": {
-      const id = issueNum(ctx.issueId);
+      const id = ctx.issueLabel;
       return {
         trigger,
         title: `Dispatch ${id}?`,
@@ -142,7 +145,7 @@ export function confirmDialogFor(trigger: ConfirmationTrigger, ctx: Confirmation
       };
     }
     case "release": {
-      const id = issueNum(ctx.issueId);
+      const id = ctx.issueLabel;
       return {
         trigger,
         title: `Release ${id}?`,

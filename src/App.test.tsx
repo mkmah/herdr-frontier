@@ -13,12 +13,11 @@
 
 import { describe, it, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App, appKeyAction } from "./App.js";
+import { App } from "./App.js";
+import { ShellController } from "./shell.js";
 import {
   buildRows,
-  issueNum,
   moveCursor,
-  effortOf,
   rowTitleBudget,
   sortIssues,
   triageOf,
@@ -26,19 +25,27 @@ import {
   type Row,
 } from "./logic.js";
 import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
+import type { DispatchCoordinator } from "./dispatch.js";
 import type { RunController } from "./run.js";
 import type { ConfirmDialog } from "./confirm.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/e/issues/01-x.md",
-  title: "01 — X",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? ".scratch/e/issues/01-x.md";
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — X",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 const noopProvider: TrackerProvider = {
   listIssues: async () => [],
@@ -51,41 +58,13 @@ const noopProvider: TrackerProvider = {
   addBlocking: async () => { throw new Error("noop"); },
 };
 
-describe("logic: effortOf / issueNum", () => {
-  it("extracts the effort dir and numeric id from a repo-relative path", () => {
-    expect(effortOf(".scratch/herdr-frontier/issues/09-skeleton.md")).toBe("herdr-frontier");
-    expect(effortOf(".scratch/auth-spec/issues/22-token.md")).toBe("auth-spec");
-    expect(issueNum(".scratch/e/issues/09-skeleton.md")).toBe("#09");
-    expect(issueNum(".scratch/e/issues/README.md")).toBe("#README");
-  });
-});
-
-describe("appKeyAction — the key bindings (issue 14 stop)", () => {
-  it("maps s to start and shift-s (both parse forms) to stop — never a toggle", () => {
-    expect(appKeyAction({ name: "s", shift: false })).toBe("run-start");
-    expect(appKeyAction({ name: "s", shift: true })).toBe("run-stop"); // raw terminal
-    expect(appKeyAction({ name: "S", shift: true })).toBe("run-stop"); // kitty protocol
-  });
-
-  it("keeps the other bindings stable", () => {
-    expect(appKeyAction({ name: "q" })).toBe("quit");
-    expect(appKeyAction({ name: "escape" })).toBeNull(); // Esc no longer quits — it's a no-op outside a modal
-    expect(appKeyAction({ name: "tab" })).toBe("focus");
-    expect(appKeyAction({ name: "j" })).toBe("down");
-    expect(appKeyAction({ name: "down" })).toBe("down");
-    expect(appKeyAction({ name: "k" })).toBe("up");
-    expect(appKeyAction({ name: "up" })).toBe("up");
-    expect(appKeyAction({ name: "return" })).toBe("dispatch");
-    expect(appKeyAction({ name: "x" })).toBe("release");
-    expect(appKeyAction({ name: "r" })).toBe("reload");
-    expect(appKeyAction({ name: "t" })).toBe("toggle-view");
-    expect(appKeyAction({ name: "z" })).toBeNull();
-  });
-
-  it("makes q the sole quit key — Esc maps to no action (issue 01)", () => {
-    expect(appKeyAction({ name: "escape" })).toBeNull();
-    expect(appKeyAction({ name: "q" })).toBe("quit");
-  });
+// The render smoke never triggers a verb or a load, so a shell with inert deps
+// (the App test harness skips onMount — nothing ever calls them) is enough.
+const noopShell = new ShellController({
+  provider: noopProvider,
+  coordinator: {} as unknown as DispatchCoordinator,
+  runController: { load: () => null } as unknown as RunController,
+  confirmPolicy: {},
 });
 
 describe("logic: triageOf", () => {
@@ -217,7 +196,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
 
     const setup = await testRender(() => (
       <App
-        provider={noopProvider}
+        shell={noopShell}
         initialIssues={[first, second]}
         initialDetail={detail}
       />
@@ -256,7 +235,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[issue]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -275,7 +254,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   });
 
   it("renders the empty state when initialIssues is empty", async () => {
-    const setup = await testRender(() => <App provider={noopProvider} initialIssues={[]} />);
+    const setup = await testRender(() => <App shell={noopShell} initialIssues={[]} />);
     await setup.flush();
     expect(setup.captureCharFrame()).toContain("no issues");
     setup.renderer.destroy();
@@ -294,7 +273,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(() => (
-      <App provider={noopProvider} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
+      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
     ));
     await setup.flush();
     const frame = setup.captureCharFrame();
@@ -312,7 +291,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const tall = mk({ id: ".scratch/herdr-frontier/issues/01-x.md", title: "01 — X" });
     const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[tall]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} />,
       { width: 100, height: 12 },
     );
     await setup.flush();
@@ -332,7 +311,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...impl, body: "Build the driver.", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[impl]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -348,7 +327,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const human = mk({ id: ".scratch/herdr-frontier/issues/13-human.md", labels: ["ready-for-human"] });
     const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[human]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -364,7 +343,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   it("advertises the x stop+reopen binding in the footer", async () => {
     const issue = mk();
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[issue]} />,
+      () => <App shell={noopShell} initialIssues={[issue]} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -391,13 +370,18 @@ describe("App (initial render smoke — two-pane shell)", () => {
         ],
       }),
     } as unknown as RunController;
+    const runShell = new ShellController({
+      provider: noopProvider,
+      coordinator: {} as unknown as DispatchCoordinator,
+      runController,
+      confirmPolicy: {},
+    });
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={runShell}
           initialIssues={[issue]}
           initialDetail={detail}
-          runController={runController}
         />
       ),
       { width: 120, height: 20 },
@@ -438,7 +422,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={noopShell}
           initialIssues={[root, child]}
           initialDetail={detail}
           initialView="tree"
@@ -471,7 +455,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // connectors must not leak into it (the tree is a toggleable secondary view).
   it("keeps the tree out of the default (list) view", async () => {
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[mk()]} />,
+      () => <App shell={noopShell} initialIssues={[mk()]} />,
       { width: 100, height: 20 },
     );
     await setup.flush();
@@ -494,7 +478,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...long, body: "", comments: [] };
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[long]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[long]} initialDetail={detail} />,
       { width: 100, height: 16 },
     );
     await setup.flush();
@@ -521,7 +505,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={noopShell}
           initialIssues={[root, child]}
           initialDetail={detail}
           initialView="tree"
@@ -563,7 +547,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const setup = await testRender(
       () => (
         <App
-          provider={noopProvider}
+          shell={noopShell}
           initialIssues={[issue]}
           initialDetail={detail}
           initialModal={modal}
@@ -592,7 +576,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
   // render must not sprout a stray dialog (the modal key is null).
   it("paints no overlay when no dialog is open", async () => {
     const setup = await testRender(
-      () => <App provider={noopProvider} initialIssues={[mk()]} />,
+      () => <App shell={noopShell} initialIssues={[mk()]} />,
       { width: 100, height: 20 },
     );
     await setup.flush();

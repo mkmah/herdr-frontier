@@ -11,18 +11,28 @@
 import { describe, it, expect } from "bun:test";
 import type { AgentRecord, AgentStatus } from "./herdr-client.js";
 import type { Issue } from "./tracker/provider.js";
-import { attentionTransitions, mapAgentStates } from "./agent-state.js";
+import {
+  attentionTransitions,
+  mapAgentStates,
+} from "./agent-state.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/herdr-frontier/issues/13-live.md",
-  title: "13 — Live",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? ".scratch/herdr-frontier/issues/13-live.md";
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "13 — Live",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 const ID = ".scratch/herdr-frontier/issues/13-live.md";
 const ID2 = ".scratch/herdr-frontier/issues/14-run.md";

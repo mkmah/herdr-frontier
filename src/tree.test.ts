@@ -7,17 +7,24 @@
 import { describe, it, expect } from "bun:test";
 import type { Issue } from "./tracker/provider.js";
 import { buildForest, flattenForest } from "./tree.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
-const mk = (over: Partial<Issue> = {}): Issue => ({
-  id: ".scratch/e/issues/01-a.md",
-  title: "01 — A",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): Issue => {
+  const id = over.id ?? ".scratch/e/issues/01-a.md";
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — A",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    ...over,
+  };
+};
 
 describe("buildForest — the forward forest", () => {
   it("makes children the issues a node blocks, and roots the no-in-run-blocker issues", () => {

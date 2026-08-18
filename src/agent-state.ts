@@ -18,10 +18,7 @@
 
 import type { AgentRecord, AgentStatus } from "./herdr-client.js";
 import type { Issue } from "./tracker/provider.js";
-import { triageOf } from "./logic.js";
-
-/** The only label state that raises a herdr notification (issue 13). */
-const NOTIFY_HUMAN_LABEL = "ready-for-human";
+import { attention } from "./logic.js";
 
 /**
  * Build the issue-id → `AgentStatus` map from a fresh `herdr agent list` poll.
@@ -55,18 +52,18 @@ export interface AttentionTransitionInput {
 
 /**
  * The issue ids that "need a human" for the notification's purposes this
- * snapshot: a `ready-for-human` triage role, or a dispatched agent that is
- * `blocked` (issue 13 — CONTEXT.md: Attention lane is label state PLUS agent
- * state). Everything else (working/idle/done agents, needs-info, needs-triage)
- * is not a notification trigger.
+ * snapshot: `attention` at its `"notify"` kind — a `ready-for-human` triage
+ * role, or a dispatched agent that is `blocked` (issue 13 — CONTEXT.md:
+ * Attention lane is label state PLUS agent state). Everything else
+ * (working/idle/done agents, needs-info, needs-triage) is not a notification
+ * trigger — the `"notify"`/`"human"` split lives in the one `attention`
+ * predicate (Card 4), never in a separate test here.
  */
 function notifiableIds(issues: Issue[], states: Map<string, AgentStatus>): Set<string> {
   const ids = new Set<string>();
-  for (const issue of issues) {
-    if (triageOf(issue) === NOTIFY_HUMAN_LABEL) ids.add(issue.id);
-  }
-  for (const [id, status] of states) {
-    if (status === "blocked") ids.add(id);
+  const byId = new Map(issues.map((i) => [i.id, i]));
+  for (const id of new Set([...issues.map((i) => i.id), ...states.keys()])) {
+    if (attention(byId.get(id) ?? null, states.get(id)) === "notify") ids.add(id);
   }
   return ids;
 }

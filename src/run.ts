@@ -18,7 +18,6 @@
 import { join } from "node:path";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import type { Issue, TrackerProvider } from "./tracker/provider.js";
-import { effortOf, issueNumber } from "./logic.js";
 import { autoSpawnable, frontier } from "./orchestrator.js";
 import { sessionNameFor, type DispatchCoordinator } from "./dispatch.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
@@ -116,7 +115,7 @@ function sanitize(s: string): string {
 
 /** The Issues a run-root's graph walks: every Issue in the root's effort. */
 export function runScope(issues: Issue[], root: string): Issue[] {
-  return issues.filter((i) => effortOf(i.id) === root);
+  return issues.filter((i) => i.effort === root);
 }
 
 /** True when every tracked member is terminal — the run has nothing left to do. */
@@ -184,7 +183,7 @@ export function advanceRun(run: RunState, allIssues: Issue[], now: number = Date
   const eligible = next.issues
     .filter((m) => m.status === "pending")
     .map((m) => byId.get(m.id)!)
-    .sort((a, b) => issueNumber(a.id) - issueNumber(b.id) || a.id.localeCompare(b.id));
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 
   if (runCompleted(next)) {
     next.status = "completed";
@@ -433,6 +432,10 @@ export class RunController {
     if (!run || run.status !== "running") return;
 
     const { run: next, eligible } = advanceRun(run, all);
+    // Members are derived from the fresh snapshot, so this map resolves each
+    // member to its record's adapter-owned facts (the session name's
+    // `<effort>-<num>` shape) without parsing the id (Card 2).
+    const byId = new Map(all.map((i) => [i.id, i]));
 
     for (const issue of eligible) {
       // The concurrency cap: never more than `next.concurrency` members in
@@ -471,11 +474,13 @@ export class RunController {
     if (this.deps.transcripts) {
       for (const member of next.issues) {
         if (member.status !== "resolved" || member.ingested) continue;
+        const issue = byId.get(member.id);
+        if (!issue) continue; // the issue left the snapshot — nothing to ingest
         try {
           await this.deps.transcripts.ingest({
             id: member.id,
             kind: member.kind ?? DEFAULT_PROFILES.default_profile.kind,
-            agentName: sessionNameFor(member.id),
+            agentName: sessionNameFor(issue),
           });
           member.ingested = true;
           member.ingestError = undefined;

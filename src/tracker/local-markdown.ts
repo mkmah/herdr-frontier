@@ -43,9 +43,36 @@ import {
 // Layout of the local issue store: <repoRoot>/.scratch/<effort>/issues/<file>.md
 const SCRATCH_DIR = ".scratch";
 const ISSUES_DIR = "issues";
+const TRANSCRIPTS_DIR = "transcripts";
 const MD_EXT = ".md";
 const VALID_STATUS: ReadonlySet<IssueStatus> = new Set(["open", "claimed", "resolved"]);
 const WAYFINDER_TYPES: ReadonlySet<IssueType> = new Set(["research", "prototype", "grilling"]);
+
+// --- id facts (Card 2) ------------------------------------------------------
+// The tracker owns its id format: these three parse a repo-relative id once and
+// fill the record's adapter-owned `effort` / `num` / `order` fields, so policy
+// (sorting, grouping, frontier order) reads facts instead of parsing paths.
+// Consumers outside the adapter must use the record fields — never these.
+
+/** The `<effort>` directory of an id (`.scratch/<effort>/issues/<file>.md`). */
+export function idEffort(id: string): string {
+  return id.split("/")[1] ?? "(ungrouped)";
+}
+
+/** The short-id label WITHOUT the `#`: the filename's numeric prefix if it has
+ *  one (`"09"`), else the filename stem (`"README"`). */
+export function idNum(id: string): string {
+  const file = id.split("/").pop() ?? id;
+  return file.match(/^(\d+)/)?.[1] ?? file.replace(/\.md$/, "");
+}
+
+/** The numeric sort order of an id — its filename prefix as a number, else
+ *  `Number.MAX_SAFE_INTEGER` (no-number issues sort last). */
+export function idOrder(id: string): number {
+  const n = parseInt(idNum(id), 10);
+  return Number.isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
+}
+
 
 export interface LocalMarkdownOptions {
   /** Absolute repo root; issue ids are paths relative to this. */
@@ -57,6 +84,14 @@ export class LocalMarkdownProvider implements TrackerProvider {
 
   constructor(opts: LocalMarkdownOptions) {
     this.repoRoot = opts.repoRoot;
+  }
+
+  /** The repo-relative path of an issue's structured transcript: a sibling of
+   *  the issue file under the same effort's `transcripts/` dir. The adapter
+   *  owns the id↔path layout, so the transcript ingester reads this from here
+   *  instead of splicing the id itself (Card 2). */
+  structuredTranscriptPath(id: string): string {
+    return id.replace(`/${ISSUES_DIR}/`, `/${TRANSCRIPTS_DIR}/`);
   }
 
   async listIssues(filter?: IssueFilter): Promise<Issue[]> {
@@ -437,6 +472,9 @@ export function parseIssue(content: string, id: string, display?: DisplayMeta): 
   const fm = parseFrontmatter(content, id);
   return {
     id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
     title: fm.title,
     status: fm.status,
     type: fm.type,
@@ -454,6 +492,9 @@ export function parseDetail(content: string, id: string, display?: DisplayMeta):
   const body = lines.slice(fm.bodyStart).join("\n").trim();
   return {
     id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
     title: fm.title,
     status: fm.status,
     type: fm.type,

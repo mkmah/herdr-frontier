@@ -63,3 +63,7 @@ _Avoid_: Log, Output dump.
 **Confirmable action**:
 An action that spawns or kills a herdr agent or rewrites issue status, so it requires a confirmation gate before it executes — dispatch, release, run-start, and run-stop. Navigation, reload, and quit never confirm. The gate is the default (Confirm is the pre-focused button, Esc cancels); it is bypassable per action by a `[confirm]` config table (repo over user precedence), never by an in-modal toggle.
 _Avoid_: Destructive action, Confirmation prompt.
+
+**Shell**:
+The signal-free deep module behind the primary shell's behavior — the four Confirmable verbs, their confirmation gate, and the load/poll pipeline (Src `ShellController`, `ShellRequestResult`, `ShellOutcome`). `request` decides "ask or go" and the self-describing dialog carries its trigger, so the controller never holds a pending action; `confirm` runs the verb. App is the thin render adapter over this seam: it owns every signal, forwards keys and mouse, and applies the outcome records the controller returns.
+_Avoid_: Controller (the domain already uses Coordinator for the manual dispatcher and Controller for runs), Gate keeper.

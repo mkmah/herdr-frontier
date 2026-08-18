@@ -7,28 +7,13 @@
 
 import type { AgentStatus } from "./herdr-client.js";
 import type { Issue } from "./tracker/provider.js";
-import { isLabelHumanTurn } from "./logic.js";
+import { attention } from "./logic.js";
 
 /** List state, resolved per `Issue` (prototype 06's four-state model). */
 export type ListState = "done" | "running" | "blocked" | "frontier";
 
 /** Which pane has keyboard focus. */
 export type Focus = "list" | "detail";
-
-/**
- * True when the issue needs a human (CONTEXT.md: Attention lane — label state
- * PLUS agent state). Two paths:
- *  - a human label is the triage role (`ready-for-human` / `needs-info` /
- *    `needs-triage`), OR
- *  - a dispatched agent went `blocked` (issue 13) — the agent needs human help.
- *
- * `agentStatus` is the live status of the issue's pane (from the ~2s poll),
- * or undefined when the issue isn't dispatched / its pane isn't tracked. The
- * second arg is optional so every existing call site keeps working.
- */
-export function isHumanTurn(issue: Issue, agentStatus?: AgentStatus): boolean {
-  return isLabelHumanTurn(issue) || agentStatus === "blocked";
-}
 
 /**
  * The issue's list state:
@@ -60,7 +45,7 @@ export interface IssueIcon {
 export function iconFor(issue: Issue, isResolved: (id: string) => boolean, agentStatus?: AgentStatus): IssueIcon {
   const s = listStateOf(issue, isResolved);
   if (s === "done") return { glyph: "✓", state: "done" };
-  if (isHumanTurn(issue, agentStatus)) return { glyph: "☻", state: "human" };
+  if (attention(issue, agentStatus) !== null) return { glyph: "☻", state: "human" };
   if (s === "running") return { glyph: "⟳", state: "running" };
   if (s === "blocked") return { glyph: "✗", state: "blocked" };
   return { glyph: "○", state: "frontier" };

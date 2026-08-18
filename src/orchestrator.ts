@@ -6,7 +6,7 @@
 // consume these; nothing below this module knows a tracker or an agent.
 
 import type { Issue } from "./tracker/provider.js";
-import { HUMAN_ROLES, blockerResolved, issueNumber } from "./logic.js";
+import { HUMAN_ROLES, blockerResolved } from "./logic.js";
 
 // --- dispatch --------------------------------------------------------------
 
@@ -64,13 +64,14 @@ export function autoSpawnable(issue: Issue): boolean {
 
 /**
  * The set of issues claimable right now (CONTEXT.md): `open ∧ unclaimed ∧
- * every blockedBy id resolved`, ordered first-by-number (the numeric prefix of
- * each id's filename, per the local-markdown tracker's frontier convention;
- * ties broken by id for a stable, deterministic order).
+ * every blockedBy id resolved`, ordered first-by-number — the record's
+ * adapter-owned `order` field (the local-markdown tracker fills it from the
+ * numeric filename prefix per its frontier convention; ties broken by id for a
+ * stable, deterministic order).
  */
 export function frontier(issues: Issue[]): Issue[] {
   return issues
     .filter((i) => i.status === "open" && i.assignee === null)
     .filter((i) => i.blockedBy.every((b) => blockerResolved(b, i, issues)))
-    .sort((a, b) => issueNumber(a.id) - issueNumber(b.id) || a.id.localeCompare(b.id));
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }

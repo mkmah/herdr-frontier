@@ -17,6 +17,7 @@ import { HerdrClient, type HerdrRunner } from "./herdr-client.js";
 import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
 import { DEFAULT_PROFILES } from "./profiles.js";
 import { TranscriptIngester } from "./transcript.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 import {
   advanceRun,
   runScope,
@@ -40,18 +41,27 @@ const D = idOf("04");
 const NOW = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
 
-const mk = (over: Partial<Issue> = {}): IssueDetail => ({
-  id: A,
-  title: "01 — A",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  body: "",
-  comments: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): IssueDetail => {
+  const id = over.id ?? A;
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "01 — A",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    body: "",
+    comments: [],
+    ...over,
+  };
+};
+
+/** The adapter's sibling-transcript layout, mirrored for the fake provider. */
+const transcriptPath = (id: string) => id.replace("/issues/", "/transcripts/");
 
 const emptyRun = (root: string): RunState => ({
   id: runIdFor(root),
@@ -601,6 +611,7 @@ describe("RunController", () => {
       client: herdrHarness().client,
       provider,
       repoRoot: "/repo",
+      transcriptPath,
       config: {},
     });
     const h = harness([], { provider, transcripts: ingester });
@@ -624,7 +635,7 @@ describe("RunController", () => {
       const claims = new ClaimRegistry();
       const { client } = herdrHarness();
       const coordinator = new DispatchCoordinator({ client, provider, profiles: DEFAULT_PROFILES, claims, cwd: "/repo" });
-      const ingester = new TranscriptIngester({ client, provider, repoRoot: "/repo", config: {} });
+      const ingester = new TranscriptIngester({ client, provider, repoRoot: "/repo", transcriptPath, config: {} });
       const first = new RunController({ provider, coordinator, store, transcripts: ingester });
       await first.start(EFFORT);
       await first.stepAll();
@@ -640,7 +651,7 @@ describe("RunController", () => {
     const claims2 = new ClaimRegistry();
     const { client: client2, calls: calls2 } = herdrHarness();
     const coordinator2 = new DispatchCoordinator({ client: client2, provider, profiles: DEFAULT_PROFILES, claims: claims2, cwd: "/repo" });
-    const ingester2 = new TranscriptIngester({ client: client2, provider, repoRoot: "/repo", config: {} });
+    const ingester2 = new TranscriptIngester({ client: client2, provider, repoRoot: "/repo", transcriptPath, config: {} });
     const second = new RunController({ provider, coordinator: coordinator2, store, transcripts: ingester2 });
     await second.stepAll();
     expect(provider.commented).toHaveLength(1);
@@ -652,7 +663,7 @@ describe("RunController", () => {
     const failingClient = new HerdrClient({
       runner: async () => ({ code: 1, stdout: "", stderr: "agent read boom" }),
     });
-    const ingester = new TranscriptIngester({ client: failingClient, provider, repoRoot: "/repo", config: {} });
+    const ingester = new TranscriptIngester({ client: failingClient, provider, repoRoot: "/repo", transcriptPath, config: {} });
     const h = harness([], { provider, transcripts: ingester });
     await h.controller.start(EFFORT);
     await h.controller.stepAll();

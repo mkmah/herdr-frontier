@@ -12,9 +12,9 @@
 // IO-behind-seams: a TrackerProvider (Seam 1) + the injectable herdr client (Seam 3).
 
 import { dispatch } from "./orchestrator.js";
-import { effortOf, issueNum, trunc } from "./logic.js";
+import { issueLabel, trunc } from "./logic.js";
 import { AlreadyClaimed, ClaimBusy, type Issue, type TrackerProvider } from "./tracker/provider.js";
-import { HerdrClient, type AgentStatus } from "./herdr-client.js";
+import { HerdrClient, type AgentRecord, type AgentStatus } from "./herdr-client.js";
 import { attentionTransitions, mapAgentStates } from "./agent-state.js";
 import { profileKeyFor, resolveProfile, type ProfilesConfig } from "./profiles.js";
 
@@ -102,12 +102,13 @@ export class ClaimRegistry {
  * target). herdr requires: lowercase letter first, then [a-z0-9_-], ≤32 chars.
  * The old `#NN` label violated that (starts with `#`), so we derive
  * `<effort>-<num>` instead — which also disambiguates two efforts' "#09".
+ * Reads the record's adapter-owned `effort`/`num` facts (Card 2); the caller
+ * passes the whole Issue so nothing here parses the id.
  * Exported for the run-controller's transcript ingester (issue 17), which
  * targets the same agent `agent read` takes the name of.
  */
-export function sessionNameFor(id: string): string {
-  const num = issueNum(id).replace(/^#/, "");
-  return sanitizeAgentName(`${effortOf(id)}-${num}`);
+export function sessionNameFor(issue: Issue): string {
+  return sanitizeAgentName(`${issue.effort}-${issue.num}`);
 }
 
 /** Map arbitrary text onto herdr's agent-name charset (lowercase, [a-z0-9_-],
@@ -211,7 +212,7 @@ export class DispatchCoordinator {
       // AlreadyClaimed (caught below), not a double-dispatch.
       const claimed = await this.deps.provider.claim(issue.id);
       const profile = resolveProfile(this.deps.profiles, profileKeyFor(issue));
-      const name = sessionNameFor(issue.id);
+      const name = sessionNameFor(issue);
       const { paneId, tabId } = await this.deps.client.createTab({
         cwd: this.deps.cwd ?? process.cwd(),
         label: tabLabelFor(issue),
@@ -318,6 +319,24 @@ export class DispatchCoordinator {
   }
 
   /**
+   * The ~2s poll's whole reconcile (architecture review 2026-08, card 3): the
+   * fresh snapshot's claims, the dead-dispatch cleanup, and the attention
+   * diff + notification side effect — with ONE `herdr agent list` read feeding
+   * both the dead-dispatch check and the live agent-state map (two reconcilers
+   * used to spawn the CLI twice per tick). The shell controller's tick calls
+   * this, then steps the run-controller on the same snapshot.
+   *
+   * Returns the fresh issue-id → `AgentStatus` map so the caller can feed it
+   * into the signal that drives the list rows live.
+   */
+  async reconcileTick(freshIssues: Issue[]): Promise<Map<string, AgentStatus>> {
+    this.reconcileClaims(freshIssues);
+    const agents = await this.deps.client.listAgents();
+    await this.reconcileDeadDispatches(agents);
+    return this.reconcileAttention(freshIssues, agents);
+  }
+
+  /**
    * Release dispatches whose herdr tab was closed before our claim was first
    * observed on a reload (status never reached `claimed` in this session's
    * view). Without this, closing a tab in that window would leave the issue
@@ -325,7 +344,7 @@ export class DispatchCoordinator {
    * the tracker status owns those. A grace window (default 10s) after dispatch
    * avoids racing the agent's registration in `herdr agent list`.
    */
-  async reconcileDeadDispatches(): Promise<void> {
+  private async reconcileDeadDispatches(agents: AgentRecord[]): Promise<void> {
     const grace = this.deps.deadDispatchGraceMs ?? 10_000;
     const now = Date.now();
     const candidates = this.deps.claims.ids().filter((id) => {
@@ -334,11 +353,7 @@ export class DispatchCoordinator {
       return at != null && now - at >= grace && this.deps.claims.paneIdOf(id) != null;
     });
     if (candidates.length === 0) return;
-    const alive = new Set(
-      (await this.deps.client.listAgents())
-        .map((a) => a.pane_id)
-        .filter((p): p is string => typeof p === "string"),
-    );
+    const alive = new Set(agents.map((a) => a.pane_id).filter((p): p is string => typeof p === "string"));
     for (const id of candidates) {
       const pane = this.deps.claims.paneIdOf(id);
       if (pane && !alive.has(pane)) {
@@ -355,36 +370,38 @@ export class DispatchCoordinator {
    * pure pane→status mapping lives in `agent-state.ts`. An issue whose pane is
    * gone (tab closed / agent vanished) simply drops out, which the display
    * layer reads as "no live state" and falls back to the issue's own status.
-   * Failures are surfaced to the caller (the poll loop treats them as
-   * non-fatal — the next tick retries).
    */
-  async pollAgentStates(): Promise<Map<string, AgentStatus>> {
+  private mapAgentStates(agents: AgentRecord[]): Map<string, AgentStatus> {
     const issueToPane = new Map<string, string>();
     for (const id of this.deps.claims.ids()) {
       const pane = this.deps.claims.paneIdOf(id);
       if (pane) issueToPane.set(id, pane);
     }
-    const agents = await this.deps.client.listAgents();
     return mapAgentStates(agents, issueToPane);
   }
 
   /**
-   * The attention watcher's per-tick reconcile (issue 13): poll the live agent
-   * states, diff them against the previous tick's snapshot (issue labels +
-   * agent states), and fire a `herdr notification show` toast for each issue
-   * that newly needs a human — an Issue that became `ready-for-human` (label
-   * change) or a dispatched agent that went `blocked` (agent-status change).
-   * Idempotent across polls (stays-blocked / stays-human doesn't re-fire).
+   * The attention watcher's per-tick reconcile (issue 13): diff the fresh agent
+   * states + issue snapshot against the previous tick's, and fire a `herdr
+   * notification show` toast for each issue that newly needs a human — an Issue
+   * that became `ready-for-human` (label change) or a dispatched agent that
+   * went `blocked` (agent-status change). Idempotent across polls
+   * (stays-blocked / stays-human doesn't re-fire). `agents` is the tick's one
+   * shared `agent list` read, already fetched by {@link reconcileTick}.
    *
-   * Returns the fresh issue-id → `AgentStatus` map so the App can feed it into
-   * the Solid signal that drives the list rows live. The pure diff lives in
-   * `attentionTransitions` (agent-state.ts); this method owns the prev-snapshot
-   * memory + the notification side effect, keeping the herdr client behind the
-   * coordinator seam. Notification failures are swallowed (best-effort — the
-   * toast is a side-channel, not on the dispatch critical path).
+   * Returns the fresh issue-id → `AgentStatus` map so the caller can feed it
+   * into the Solid signal that drives the list rows live. The pure diff lives
+   * in `attentionTransitions` (agent-state.ts); this method owns the
+   * prev-snapshot memory + the notification side effect, keeping the herdr
+   * client behind the coordinator seam. Notification failures are swallowed
+   * (best-effort — the toast is a side-channel, not on the dispatch critical
+   * path).
    */
-  async reconcileAttention(freshIssues: Issue[]): Promise<Map<string, AgentStatus>> {
-    const agentStates = await this.pollAgentStates();
+  private async reconcileAttention(
+    freshIssues: Issue[],
+    agents: AgentRecord[],
+  ): Promise<Map<string, AgentStatus>> {
+    const agentStates = this.mapAgentStates(agents);
     // First poll — prime the baseline without firing. Otherwise every issue
     // that was already human-turn before the pane opened would toast at startup.
     if (this.prevAttention === null) {
@@ -420,5 +437,5 @@ export class DispatchCoordinator {
  */
 function attentionTitle(issue: Issue, agentStatus?: AgentStatus): string {
   const why = agentStatus === "blocked" ? "agent blocked" : "ready for human";
-  return `herdr-frontier: ${issueNum(issue.id)} ${why}`;
+  return `herdr-frontier: ${issueLabel(issue)} ${why}`;
 }

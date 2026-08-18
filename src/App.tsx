@@ -15,22 +15,27 @@
 // One cross-view theme module (./theme.ts) drives the header, list, detail, and
 // footer — change a token and the whole app re-themes. All presentation logic
 // (grouping, list state, icon precedence, focus cycling) lives in ./logic.ts +
-// ./display.ts so it is unit-testable; this file is the thin Solid render layer.
+// ./display.ts so it is unit-testable. The Confirmable verbs, the gate, and the
+// load/poll pipeline live in ./shell.ts (the ShellController — architecture
+// review 2026-08, candidate 1); this file is the thin Solid render adapter over
+// that seam: it owns every signal, forwards keys and mouse, and applies the
+// outcome records the controller returns.
 // ============================================================================
 
 import { createSignal, createMemo, createEffect, For, Show, onMount, onCleanup, type Component } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
-import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
+import type { Issue, IssueDetail } from "./tracker/provider.js";
 import type { AgentStatus } from "./herdr-client.js";
-import { DEFAULT_RUN_CONCURRENCY, type RunController } from "./run.js";
-import { confirmationFor, modalKeyAction, type ConfirmationCtx, type ConfirmationTrigger } from "./confirm.js";
-import type { ConfirmButton, ConfirmDialog, ConfirmPolicy } from "./confirm.js";
+import type { ShellController, ShellOutcome } from "./shell.js";
+import { appKeyAction } from "./shell.js";
+import { modalKeyAction } from "./confirm.js";
+import type { ConfirmButton, ConfirmDialog } from "./confirm.js";
 import {
+  attention,
   blockerResolved,
   buildRows,
-  effortOf,
-  issueNum,
+  issueLabel,
   moveCursor,
   rowTitleBudget,
   sortIssues,
@@ -40,7 +45,6 @@ import {
   cycleFocus,
   humanizeAge,
   iconFor,
-  isHumanTurn,
   trackClick,
   wheelDelta,
   MouseButton,
@@ -50,7 +54,6 @@ import {
 import { iconColor, markdownSyntaxStyle, THEME, stateColor, triageColor } from "./theme.js";
 import { buildForest, flattenForest } from "./tree.js";
 import { dispatch } from "./orchestrator.js";
-import type { DispatchCoordinator } from "./dispatch.js";
 import { copySelection } from "./selection.js";
 
 /** The two top-level views: the primary list and the secondary dependency tree. */
@@ -66,7 +69,10 @@ export type AppView = "list" | "tree";
 const ROW_SCROLLBOX_INSET = 6;
 
 export interface AppProps {
-  provider: TrackerProvider;
+  /** The shell controller — owns the Confirmable verbs, the gate, and the
+   *  load/poll pipeline (built in index.tsx with the provider, coordinator,
+   *  run-controller, and merged `[confirm]` policy). */
+  shell: ShellController;
   /** Pre-loaded issues render synchronously (test seam); production omits it. */
   initialIssues?: Issue[];
   /** Pre-loaded detail for the first selection (test seam); production omits it. */
@@ -79,14 +85,6 @@ export interface AppProps {
   initialModal?: ConfirmDialog;
   /** Called on q. Defaults to `renderer.destroy()` (restores the terminal); overridable for tests. */
   onQuit?: () => void;
-  /** Manual single-issue dispatch (issue 12). Production builds one in index.tsx. */
-  dispatchCoordinator?: DispatchCoordinator;
-  /** Automated run-controller (issue 14). Production builds one in index.tsx. */
-  runController?: RunController;
-  /** The merged `[confirm]` bypass (confirmation-gate 04): `false` per trigger
-   *  suppresses that action's gate. Defaults to every gate on; the shell's gate
-   *  wiring consumes it (issue 05). */
-  confirmPolicy?: ConfirmPolicy;
 }
 
 /** The detail pane's dispatch feedback, scoped to the issue it dispatched. */
@@ -124,39 +122,7 @@ const RoleText: Component<{ role: keyof typeof THEME["role"]; children: any; fle
   return <text fg={r.fg} attributes={r.attr} flexGrow={p.flexGrow}>{p.children}</text>;
 };
 
-// --- key handling (pure, unit-tested) ----------------------------------------
-
-/** The actions a key press can trigger — the single source of truth the
- *  `useKeyboard` handler switches on, extracted so the bindings are testable
- *  (issue 14 stop: `s` starts, shift-`s` stops — never a toggle). */
-export type AppKeyAction =
-  | "quit"
-  | "focus"
-  | "down"
-  | "up"
-  | "dispatch"
-  | "release"
-  | "run-start"
-  | "run-stop"
-  | "toggle-view"
-  | "reload";
-
-/** Map a parsed key event to its action. shift-`s` reaches us as `name: "s"`
- *  with `shift: true` (raw terminal) or `name: "S"` (kitty protocol); both map
- *  to stop. Returns null for keys the shell ignores. */
-export function appKeyAction(key: { name?: string; shift?: boolean }): AppKeyAction | null {
-  if (key.name === "q") return "quit";
-  if (key.name === "tab") return "focus";
-  if (key.name === "j" || key.name === "down") return "down";
-  if (key.name === "k" || key.name === "up") return "up";
-  if (key.name === "return") return "dispatch";
-  if (key.name === "x") return "release";
-  if (key.name === "s" && !key.shift) return "run-start";
-  if (key.name === "S" || (key.name === "s" && key.shift)) return "run-stop";
-  if (key.name === "t") return "toggle-view";
-  if (key.name === "r") return "reload";
-  return null;
-}
+// --- key handling (./shell.ts owns the action vocabulary — appKeyAction) -----
 
 export const App: Component<AppProps> = (props) => {
   const renderer = useRenderer();
@@ -198,18 +164,16 @@ export const App: Component<AppProps> = (props) => {
   async function load() {
     setLoaded(false);
     setError(null);
-    try {
-      const fresh = sortIssues(await props.provider.listIssues());
+    const res = await props.shell.load();
+    if (res.ok) {
+      const fresh = sortIssues(res.issues);
       setIssues(fresh);
       setCursor(0);
       setTreeCursor(0);
-      props.dispatchCoordinator?.reconcileClaims(fresh);
-      await props.dispatchCoordinator?.reconcileDeadDispatches();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoaded(true);
+    } else {
+      setError(res.error);
     }
+    setLoaded(true);
   }
 
   // Production auto-loads on mount. (The OpenTUI test renderer skips onMount and
@@ -223,36 +187,18 @@ export const App: Component<AppProps> = (props) => {
     onCleanup(() => clearInterval(id));
   });
 
-  // Background poll — the coordinator claims on dispatch (`open→claimed`) and
-  // the implement skill resolves on completion (`claimed→resolved`), both from
-  // other panes; refresh so the list reflects reality, and reconcile the
-  // in-session claim mutex so an issue reset back to open becomes
-  // re-dispatchable. Issue 13: the ~2s poll also feeds each dispatched issue's
-  // live agent_status into the `agentStates` signal (rows update live) and
-  // fires a herdr notification when an issue newly needs a human (became
-  // `ready-for-human` or its dispatched agent went `blocked`) — the ~2s cadence
-  // is the proven reference pattern (research 01). Silent: never resets
-  // selection or flashes a loading state (that's what `r` / load() are for).
+  // Background poll — the controller's tick runs the whole reconcile pipeline
+  // on one fresh snapshot (claims → dead-dispatch → attention → run-step) and
+  // returns the state delta to apply: a fresh issue list, the live agent-state
+  // map (rows update live), and a run-status pulse. Silent: a failed tick (null)
+  // changes nothing — the next tick retries; never resets selection or flashes
+  // a loading state (that's what `r` / load() are for).
   async function poll() {
-    if (!props.dispatchCoordinator) return;
-    try {
-      const fresh = sortIssues(await props.provider.listIssues());
-      setIssues(fresh);
-      props.dispatchCoordinator.reconcileClaims(fresh);
-      await props.dispatchCoordinator.reconcileDeadDispatches();
-      // Agent-state poll + attention transitions → notifications (issue 13).
-      // reconcileAttention returns the fresh agent-state map; feed it into the
-      // signal so the list rows render live status.
-      const states = await props.dispatchCoordinator.reconcileAttention(fresh);
-      setAgentStates(states);
-      // Automated run-controller (issue 14): step every running run on the same
-      // fresh snapshot — dispatch each issue whose blockers have cleared, up to
-      // the per-run concurrency cap. Runs share the coordinator's claim mutex.
-      await props.runController?.stepAll(fresh);
-      setRunVersion((v) => v + 1);
-    } catch {
-      // Background poll failures are non-fatal — the next tick retries.
-    }
+    const res = await props.shell.tick();
+    if (!res) return;
+    setIssues(sortIssues(res.issues));
+    setAgentStates(res.agentStates);
+    setRunVersion((v) => v + 1);
   }
   onMount(() => {
     const id = setInterval(poll, 2000);
@@ -266,8 +212,8 @@ export const App: Component<AppProps> = (props) => {
   // logic.ts reserves "run-root" for the root *issue*, so this is the effort
   // dir, not the root). Rooted on the list cursor, so toggling in and out of
   // the tree never chases the tree cursor around.
-  const treeEffort = createMemo(() => effortOf(listSelected()?.id ?? ""));
-  const treePool = createMemo(() => issues().filter((i) => effortOf(i.id) === treeEffort()));
+  const treeEffort = createMemo(() => listSelected()?.effort ?? "");
+  const treePool = createMemo(() => issues().filter((i) => i.effort === treeEffort()));
   const treeRows = createMemo(() => flattenForest(buildForest(treePool())));
   const treeSelected = () => treeRows()[treeCursor()]?.issue;
   // The currently selected issue — view-aware, shared by the detail pane, the
@@ -336,22 +282,42 @@ export const App: Component<AppProps> = (props) => {
     }
   });
 
-  // --- manual dispatch (issue 12) ------------------------------------------
+  // --- the four Confirmable verbs, gated through the shell ------------------
+  // `Enter`/double-click = dispatch, `x` = release, `s`/`S` = run
+  // start/stop. Every verb enters through the shell's `request` — the
+  // confirmation gate's single entry, so keyboard and mouse (both views) ride
+  // the same path — and runs its body through the shell's `confirm`. The shell
+  // returns outcome records; this component only paints their signals.
+
+  /** Open the gate's dialog — Confirm is always pre-focused (the rulebook
+   *  locks it; there is no other first-focus). */
+  function openModal(dialog: ConfirmDialog) {
+    setModal({ dialog, focus: dialog.focusedButton });
+  }
+
+  // --- manual dispatch -----------------------------------------------------
   // `Enter` (or double-click) dispatches the selected Issue: claim → resolve
-  // `{id}` → `agent start` from the profile. The coordinator owns the shared
-  // claim mutex; we only render its outcome and reflect the claim in the list so
-  // the row flips to "running" without a full reload.
-  async function executeDispatch() {
+  // `{id}` → `agent start` from the profile. The coordinator (behind the shell)
+  // owns the shared claim mutex; we only render its outcome and reflect the
+  // claim in the list so the row flips to "running" without a full reload.
+  function doDispatch() {
     const sel = selected();
-    if (!sel || !props.dispatchCoordinator) return;
+    if (!sel) return;
+    const gate = props.shell.request("dispatch", sel);
+    if (gate.kind === "dialog") { openModal(gate.dialog); return; }
+    void runDispatch(sel);
+  }
+  async function runDispatch(sel: Issue) {
     setDispatchState({ status: "running", issueId: sel.id });
     try {
-      const r = await props.dispatchCoordinator.dispatchIssue(sel);
+      const outcome = await props.shell.confirm("dispatch", sel);
+      if (outcome.verb !== "dispatch") return;
+      const r = outcome.result;
       if (r.ok) {
-        setDispatchState({ status: "ok", issueId: sel.id, paneId: r.paneId, command: r.command });
+        setDispatchState({ status: "ok", issueId: r.issue.id, paneId: r.paneId, command: r.command });
         // The coordinator has already atomically claimed (`Status: claimed`) via
-        // the provider before agent start; the background poll reflects it in the
-        // list row. Resolution (`→ resolved`) is the implement skill's, later.
+        // the provider before agent start; the background poll reflects it in
+        // the list row. Resolution (`→ resolved`) is the implement skill's, later.
       } else {
         const msg =
           r.reason === "already-dispatched"
@@ -361,7 +327,7 @@ export const App: Component<AppProps> = (props) => {
               : r.reason === "claim-busy"
                 ? "claim lock busy — try again"
                 : "human turn — not auto-dispatched";
-        setDispatchState({ status: "error", issueId: sel.id, message: msg });
+        setDispatchState({ status: "error", issueId: r.issue.id, message: msg });
       }
     } catch (e) {
       setDispatchState({ status: "error", issueId: sel.id, message: e instanceof Error ? e.message : String(e) });
@@ -373,17 +339,24 @@ export const App: Component<AppProps> = (props) => {
   // session spawned for it. The provider release is authoritative; we optimistically
   // reflect the reopen in the list so the row flips back without a full reload
   // (which would reset the cursor). The background poll reconciles anything stale.
-  async function executeRelease() {
+  function doRelease() {
     const sel = selected();
-    if (!sel || !props.dispatchCoordinator) return;
+    if (!sel) return;
+    const gate = props.shell.request("release", sel);
+    if (gate.kind === "dialog") { openModal(gate.dialog); return; }
+    void runRelease(sel);
+  }
+  async function runRelease(sel: Issue) {
     setReleaseState({ status: "running", issueId: sel.id });
     try {
-      const r = await props.dispatchCoordinator.releaseIssue(sel);
+      const outcome = await props.shell.confirm("release", sel);
+      if (outcome.verb !== "release") return;
+      const r = outcome.result;
       if (r.ok) {
-        setReleaseState({ status: "ok", issueId: sel.id, tabClosed: r.tabClosed });
-        setIssues((prev) => prev.map((i) => (i.id === sel.id ? { ...i, status: "open" } : i)));
+        setReleaseState({ status: "ok", issueId: r.issue.id, tabClosed: r.tabClosed });
+        setIssues((prev) => prev.map((i) => (i.id === r.issue.id ? { ...i, status: "open" } : i)));
       } else {
-        setReleaseState({ status: "error", issueId: sel.id, message: r.message });
+        setReleaseState({ status: "error", issueId: r.issue.id, message: r.message });
       }
     } catch (e) {
       setReleaseState({ status: "error", issueId: sel.id, message: e instanceof Error ? e.message : String(e) });
@@ -397,112 +370,63 @@ export const App: Component<AppProps> = (props) => {
   // reopen the issue) — the one-key version of pressing x on every issue.
   // Starting is idempotent — a running run is returned untouched, so `s` never
   // toggles a run off. The controller walks the graph, dispatching each issue
-  // as its blockers clear; the poll loop steps it. Stopping is a deliberate,
-  // separate key: the poll steps ALL stored runs, so stop-all is the reliable
-  // end to the auto-dispatch, and releasing the in-flight work is what makes
-  // "stop" actually feel like it stopped.
-  async function executeStart() {
+  // as its blockers clear; the poll loop steps it.
+  function startRun() {
     const sel = selected();
-    if (!sel || !props.runController) return;
+    if (!sel) return;
+    const gate = props.shell.request("run-start", sel);
+    if (gate.kind === "dialog") { openModal(gate.dialog); return; }
+    void runStart(sel);
+  }
+  async function runStart(sel: Issue) {
     try {
-      await props.runController.start(effortOf(sel.id));
+      await props.shell.confirm("run-start", sel);
       setRunVersion((v) => v + 1);
     } catch {
       // surfaced next poll — start failures are non-fatal
     }
   }
-  async function executeStop() {
-    if (!props.runController) return;
+  function stopRun() {
+    const gate = props.shell.request("run-stop");
+    if (gate.kind === "dialog") { openModal(gate.dialog); return; }
+    void runStop();
+  }
+  async function runStop() {
     try {
-      await props.runController.stopAllAndRelease();
+      await props.shell.confirm("run-stop");
       setRunVersion((v) => v + 1);
     } catch {
       // surfaced next poll — stop failures are non-fatal
     }
   }
 
-  // --- the confirmation gate (confirmation-gate 05) --------------------------
-  // Every Confirmable verb asks the pure rulebook (./confirm.ts) *before* it
-  // runs. `gated(trigger, body)` opens the trigger's dialog, or runs `body`
-  // directly when the `[confirm]` policy suppresses the trigger or the action
-  // is a structural no-op — exactly as the verb behaved before the gate. The
-  // gate lives at the top of each verb (the four `do*`/`start*`/`stop*` entries
-  // below are the verbs' sole entry points), so Enter *and* the mouse
-  // double-click (both views) ride the same path and can never bypass each
-  // other.
-
-  const confirmPolicy = () => props.confirmPolicy ?? {};
-
-  /** The live facts + subjects the rulebook decides on (issue 05): selection,
-   *  dispatcher/controller presence, dispatchability, run tallies, and the
-   *  ids/titles/roots the dialog copy names. */
-  function gateCtx(): ConfirmationCtx {
-    const sel = selected();
-    const runRoot = sel ? effortOf(sel.id) : "";
-    const run = sel && props.runController ? props.runController.load(runRoot) : null;
-    const outcome = sel ? dispatch(sel) : null;
-    return {
-      hasSelection: !!sel,
-      hasCoordinator: !!props.dispatchCoordinator,
-      hasController: !!props.runController,
-      // dispatchable: the selected issue's dispatch outcome is implement/wayfinder
-      // and it is still open — a claimed/resolved/wontfix issue can't dispatch.
-      dispatchable:
-        !!sel && sel.status === "open" && (outcome?.kind === "implement" || outcome?.kind === "wayfinder"),
-      runningRuns: props.runController?.runningRuns ?? 0,
-      issueId: sel?.id ?? "",
-      issueTitle: sel?.title ?? "",
-      runRoot,
-      // A stored run pins its own cap; a not-yet-started run uses the
-      // controller's effective concurrency (deps override → env key → default).
-      concurrency: run?.concurrency ?? props.runController?.concurrency ?? DEFAULT_RUN_CONCURRENCY,
-      inflight: props.runController?.inflightCount ?? 0,
-    };
-  }
-
-  /** Run one Confirmable trigger through the gate: open its dialog, or — when
-   *  the policy suppresses it / it's a structural no-op — run the verb's
-   *  unchanged body. This single path is what Enter and the mouse double-click
-   *  both enter, so the two can never diverge. */
-  function gated(trigger: ConfirmationTrigger, body: () => void) {
-    const gate = confirmationFor(trigger, confirmPolicy(), gateCtx());
-    if (gate) { openModal(gate); return; }
-    body();
-  }
-
-  /** Open the gate's dialog — Confirm is always pre-focused (the rulebook
-   *  locks it; there is no other first-focus). */
-  function openModal(dialog: ConfirmDialog) {
-    setModal({ dialog, focus: dialog.focusedButton });
-  }
-
-  // The four Confirmable verbs, gated: the keyboard handler, the list/tree
-  // double-click, and the modal's confirm all land here or on the body below.
-  function doDispatch() { gated("dispatch", () => void executeDispatch()); }
-  function doRelease() { gated("release", () => void executeRelease()); }
-  function startRun() { gated("run-start", () => void executeStart()); }
-  function stopRun() { gated("run-stop", () => void executeStop()); }
-
-  /** Confirm the open dialog: run the pending verb's unchanged body. The ~2s
-   *  poll has kept reconciling live state behind the dialog, so a state change
-   *  under it just makes the confirmed action a no-op, surfaced through the
-   *  existing detail-pane feedback (never a second dialog). */
+  /** Confirm the open dialog: run the confirmed verb's body on the current
+   *  selection. The ~2s poll has kept reconciling live state behind the dialog,
+   *  so a state change under it just makes the confirmed action a no-op,
+   *  surfaced through the existing detail-pane feedback (never a second
+   *  dialog). */
   function confirmModal() {
     const m = modal();
     if (!m) return;
     setModal(null);
     switch (m.dialog.trigger) {
-      case "dispatch":
-        void executeDispatch();
+      case "dispatch": {
+        const sel = selected();
+        if (sel) void runDispatch(sel);
         break;
-      case "release":
-        void executeRelease();
+      }
+      case "release": {
+        const sel = selected();
+        if (sel) void runRelease(sel);
         break;
-      case "run-start":
-        void executeStart();
+      }
+      case "run-start": {
+        const sel = selected();
+        if (sel) void runStart(sel);
         break;
+      }
       case "run-stop":
-        void executeStop();
+        void runStop();
         break;
     }
   }
@@ -627,7 +551,7 @@ export const App: Component<AppProps> = (props) => {
     const wantedId = sel.id;
     setDetail(null);
     setDetailLoading(true);
-    void props.provider
+    void props.shell
       .readIssue(wantedId)
       .then((d) => {
         if (selected()?.id === wantedId) setDetail(d);
@@ -697,7 +621,7 @@ export const App: Component<AppProps> = (props) => {
   });
 
   const openCount = () => shown().filter((i) => i.status === "open").length;
-  const yourTurn = () => shown().filter((i) => isHumanTurn(i, agentStatusOf(i))).length;
+  const yourTurn = () => shown().filter((i) => attention(i, agentStatusOf(i)) !== null).length;
 
   // --- issue row ------------------------------------------------------------
   // The lean row both views paint — the list pane's `#id · title · tasks ·
@@ -726,7 +650,7 @@ export const App: Component<AppProps> = (props) => {
           const depth = p.depth ?? 0;
           const ic = iconFor(issue, resolvedFor(issue), agentStatusOf(issue));
           const human = ic.state === "human";
-          const idStr = issueNum(issue.id);
+          const idStr = issueLabel(issue);
           const tasksStr = issue.tasks ? `${issue.tasks.done}/${issue.tasks.total}` : "";
           const tasksDone = !!issue.tasks && issue.tasks.done >= issue.tasks.total;
           const ageStr = issue.updatedAt != null ? humanizeAge(issue.updatedAt, Date.now()) : "";
@@ -794,7 +718,7 @@ export const App: Component<AppProps> = (props) => {
     const detailRec = detail();
     const loaded = detailRec && detailRec.id === sel.id;
     const ic = iconFor(sel, resolvedFor(sel), agentStatusOf(sel));
-    const headerBudget = Math.max(0, innerW - (2 + issueNum(sel.id).length + 2));
+    const headerBudget = Math.max(0, innerW - (2 + issueLabel(sel).length + 2));
     const outcome = dispatch(sel);
     const dispatchable = outcome.kind === "implement" || outcome.kind === "wayfinder";
     const ds = dispatchState();
@@ -807,7 +731,7 @@ export const App: Component<AppProps> = (props) => {
           <text fg={iconColor(ic.state, pulse())} flexShrink={0} attributes={TextAttributes.BOLD}>
             {`${ic.glyph} `}
           </text>
-          <text fg={THEME.accent.id} flexShrink={0}>{issueNum(sel.id)}</text>
+          <text fg={THEME.accent.id} flexShrink={0}>{issueLabel(sel)}</text>
           <text fg={THEME.text.dim} flexShrink={0}>  </text>
           <RoleText role="h1">{trunc(sel.title, headerBudget)}</RoleText>
         </box>
@@ -834,7 +758,7 @@ export const App: Component<AppProps> = (props) => {
             markdown body below flicker on a timer). */}
         <Show when={`run#${runVersion()}`} keyed>
           {(_runKey: string) => {
-            const run = props.runController?.load(effortOf(sel.id));
+            const run = props.shell.runFor(sel.effort);
             if (!run) return null;
             const inflight = run.issues.filter((i) => i.status === "dispatched").length;
             const pending = run.issues.filter((i) => i.status === "pending").length;
@@ -974,7 +898,7 @@ export const App: Component<AppProps> = (props) => {
       {/* detail pane — definite 60% */}
       <DetailPane
         innerW={detailInnerW()}
-        title={selected() ? ` ${issueNum(selected()!.id)} ` : " Detail "}
+        title={selected() ? ` ${issueLabel(selected()!)} ` : " Detail "}
         width="60%"
         flexGrow={1}
         flexShrink={0}
@@ -1020,7 +944,7 @@ export const App: Component<AppProps> = (props) => {
       {/* detail pane — the verbose selected-node record, below (~38%) */}
       <DetailPane
         innerW={treeDetailInnerW()}
-        title={selected() ? ` Detail · ${issueNum(selected()!.id)} ` : " Detail "}
+        title={selected() ? ` Detail · ${issueLabel(selected()!)} ` : " Detail "}
         height="38%"
       />
     </box>
@@ -1149,7 +1073,7 @@ export const App: Component<AppProps> = (props) => {
         </RoleText>
         <RoleText role="meta" flexGrow={1}> </RoleText>
         <text fg={THEME.accent.id}>
-          {selected() ? `${issueNum(selected()!.id)} · ${trunc(selected()!.title, 40)}` : ""}
+          {selected() ? `${issueLabel(selected()!)} · ${trunc(selected()!.title, 40)}` : ""}
         </text>
       </box>
 

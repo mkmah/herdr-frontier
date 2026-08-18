@@ -25,22 +25,29 @@ import {
   DispatchCoordinator,
 } from "./dispatch.js";
 import type { ProfilesConfig } from "./profiles.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
 const ID = ".scratch/herdr-frontier/issues/12-driver.md";
 const BODY = "## What to build\n\nA herdr driver with an injectable runner.";
 
-const mk = (over: Partial<Issue> = {}): IssueDetail => ({
-  id: ID,
-  title: "12 — Driver",
-  status: "open",
-  type: "task",
-  labels: ["ready-for-agent"],
-  assignee: null,
-  blockedBy: [],
-  body: BODY,
-  comments: [],
-  ...over,
-});
+const mk = (over: Partial<Issue> = {}): IssueDetail => {
+  const id = over.id ?? ID;
+  return {
+    id,
+    effort: idEffort(id),
+    num: idNum(id),
+    order: idOrder(id),
+    title: "12 — Driver",
+    status: "open",
+    type: "task",
+    labels: ["ready-for-agent"],
+    assignee: null,
+    blockedBy: [],
+    body: BODY,
+    comments: [],
+    ...over,
+  };
+};
 
 /** In-memory FakeTrackerProvider (Seam 1) mirroring the local-markdown claim gate. */
 class FakeProvider implements TrackerProvider {
@@ -330,17 +337,17 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.claims.has(ID)).toBe(false);
   });
 
-  it("reconcileDeadDispatches releases a dispatch whose tab was closed before claiming", async () => {
+  it("reconcileTick's dead-dispatch releases a dispatch whose tab was closed before claiming", async () => {
     // grace 0 so the just-dispatched claim is immediately eligible; the agent
     // list is empty → the pane is gone → release (re-dispatchable).
     const h = harness([mk()], { grace: 0, fixtures: { "agent list": ok({ agents: [] }) } });
     await h.coordinator.dispatchIssue(mk());
     expect(h.claims.has(ID)).toBe(true);
-    await h.coordinator.reconcileDeadDispatches();
+    await h.coordinator.reconcileTick([mk()]);
     expect(h.claims.has(ID)).toBe(false);
   });
 
-  it("reconcileDeadDispatches keeps a dispatch whose agent is still alive (not yet claimed)", async () => {
+  it("reconcileTick's dead-dispatch keeps a dispatch whose agent is still alive (not yet claimed)", async () => {
     // Agent still registered against the dispatched pane → it's just slow to
     // claim → keep holding (no premature release / duplicate dispatch).
     const h = harness(
@@ -348,28 +355,32 @@ describe("DispatchCoordinator.dispatchIssue", () => {
       { grace: 0, fixtures: { "agent list": ok({ agents: [{ agent_status: "working", pane_id: "wZ:p3" }] }) } },
     );
     await h.coordinator.dispatchIssue(mk());
-    await h.coordinator.reconcileDeadDispatches();
+    await h.coordinator.reconcileTick([mk()]);
     expect(h.claims.has(ID)).toBe(true);
   });
 
-  it("reconcileDeadDispatches skips confirmed dispatches (the tracker owns those)", async () => {
+  it("reconcileTick skips confirmed dispatches in dead-dispatch (the tracker owns those)", async () => {
     // Confirmed (claimed) but agent list empty — still held: status reconciles it.
     const h = harness([mk()], { grace: 0, fixtures: { "agent list": ok({ agents: [] }) } });
     await h.coordinator.dispatchIssue(mk());
     h.coordinator.reconcileClaims([mk({ status: "claimed" })]);
-    await h.coordinator.reconcileDeadDispatches();
+    await h.coordinator.reconcileTick([mk({ status: "claimed" })]);
     expect(h.claims.has(ID)).toBe(true);
   });
 
-  it("reconcileDeadDispatches respects the grace window (just dispatched, never checked)", async () => {
+  it("reconcileTick's dead-dispatch respects the grace window (just dispatched, never checked)", async () => {
+    // Within grace the claim is not yet eligible — even though the pane is gone
+    // from the agent list it stays held (no premature release). The tick reads
+    // the agent list exactly once (card 3): the same read feeds dead-dispatch
+    // and the attention map.
     const h = harness([mk()], { grace: 60_000, fixtures: { "agent list": ok({ agents: [] }) } });
     await h.coordinator.dispatchIssue(mk());
-    await h.coordinator.reconcileDeadDispatches();
+    await h.coordinator.reconcileTick([mk()]);
     expect(h.claims.has(ID)).toBe(true); // within grace — not yet eligible
-    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "list")).toBe(false); // didn't even query
+    expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "list")).toHaveLength(1); // the one shared read
   });
 
-  it("pollAgentStates maps the live agent list onto dispatched issues (issue 13)", async () => {
+  it("reconcileTick's returned map carries the live agent states (issue 13)", async () => {
     // The ~2s poll's payload: for each in-flight dispatch, the agent_status of
     // the pane it landed in. The coordinator owns the pane-id mapping; the pure
     // mapping lives in agent-state.ts. Here we wire the seam end-to-end.
@@ -387,18 +398,18 @@ describe("DispatchCoordinator.dispatchIssue", () => {
       },
     );
     await h.coordinator.dispatchIssue(mk()); // claims + creates pane wZ:p3
-    const states = await h.coordinator.pollAgentStates();
+    const states = await h.coordinator.reconcileTick([mk({ status: "claimed" })]);
     expect(states.get(ID)).toBe("blocked");
     expect(states.size).toBe(1); // the foreign pane isn't ours
   });
 
-  it("pollAgentStates drops an issue whose pane is gone (no stale entry)", async () => {
+  it("reconcileTick drops an issue whose pane is gone (no stale entry)", async () => {
     const h = harness(
       [mk()],
       { fixtures: { "agent list": ok({ agents: [] }) } }, // our pane vanished
     );
     await h.coordinator.dispatchIssue(mk());
-    const states = await h.coordinator.pollAgentStates();
+    const states = await h.coordinator.reconcileTick([mk({ status: "claimed" })]);
     expect(states.has(ID)).toBe(false);
   });
 });
@@ -407,17 +418,19 @@ describe("DispatchCoordinator.dispatchIssue", () => {
 // `herdr notification show` toast when an issue newly needs a human (became
 // ready-for-human, or its dispatched agent went blocked). The coordinator owns
 // the herdr client + the prev-state memory; the pure diff lives in agent-state.ts.
-describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
+// Exercised through reconcileTick — the whole per-tick reconcile (claims +
+// dead-dispatch + attention) behind one `agent list` read (card 3).
+describe("DispatchCoordinator.reconcileTick — the attention watcher (issue 13)", () => {
   it("fires a notification when an issue newly becomes ready-for-human", async () => {
     const h = harness(
       [mk({ labels: ["ready-for-agent"] })],
       { fixtures: { "agent list": ok({ agents: [] }) } },
     );
     // First tick — baseline, no transitions (the provider still shows the old label).
-    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-agent"] })]);
+    await h.coordinator.reconcileTick([mk({ labels: ["ready-for-agent"] })]);
     expect(h.calls.some((c) => c[0] === "notification")).toBe(false);
     // Second tick — the tracker now shows ready-for-human → fire the toast.
-    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]);
+    await h.coordinator.reconcileTick([mk({ labels: ["ready-for-human"] })]);
     const note = h.calls.find((c) => c[0] === "notification");
     expect(note).toBeDefined();
     expect(note![1]).toBe("show");
@@ -463,20 +476,20 @@ describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
       client, provider, profiles: PROFILES, claims, cwd: CWD,
     });
     await coordinator.dispatchIssue(open); // claims + creates pane wZ:p3
-    await coordinator.reconcileAttention([claimed]); // tick 1: working → no toast
+    await coordinator.reconcileTick([claimed]); // tick 1: working → no toast
     expect(calls.some((c) => c[0] === "notification")).toBe(false);
-    await coordinator.reconcileAttention([claimed]); // tick 2: blocked → toast fires
+    await coordinator.reconcileTick([claimed]); // tick 2: blocked → toast fires
     expect(calls.filter((c) => c[0] === "notification")).toHaveLength(1);
-    await coordinator.reconcileAttention([claimed]); // tick 3: stays blocked → no re-fire
+    await coordinator.reconcileTick([claimed]); // tick 3: stays blocked → no re-fire
     expect(calls.filter((c) => c[0] === "notification")).toHaveLength(1);
   });
 
   it("does not re-fire while the human-turn state persists (idempotent)", async () => {
     const h = harness([mk()], { fixtures: { "agent list": ok({ agents: [] }) } });
-    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-agent"] })]); // prime (no fire)
-    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]); // transition → fires
+    await h.coordinator.reconcileTick([mk({ labels: ["ready-for-agent"] })]); // prime (no fire)
+    await h.coordinator.reconcileTick([mk({ labels: ["ready-for-human"] })]); // transition → fires
     expect(h.calls.filter((c) => c[0] === "notification")).toHaveLength(1);
-    await h.coordinator.reconcileAttention([mk({ labels: ["ready-for-human"] })]); // stays — no re-fire
+    await h.coordinator.reconcileTick([mk({ labels: ["ready-for-human"] })]); // stays — no re-fire
     expect(h.calls.filter((c) => c[0] === "notification")).toHaveLength(1);
   });
 
@@ -490,7 +503,7 @@ describe("DispatchCoordinator.reconcileAttention (issue 13)", () => {
       },
     );
     await h.coordinator.dispatchIssue(mk()); // claims + creates pane wZ:p3
-    const states = await h.coordinator.reconcileAttention([mk({ status: "claimed" })]);
+    const states = await h.coordinator.reconcileTick([mk({ status: "claimed" })]);
     expect(states.get(ID)).toBe("blocked");
   });
 });

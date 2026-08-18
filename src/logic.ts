@@ -6,6 +6,7 @@
 // non-reactive). The component is a thin render layer over these functions.
 
 import type { Issue } from "./tracker/provider.js";
+import type { AgentStatus } from "./herdr-client.js";
 
 /** Display rows: status messages and group/issue rows, flattened for rendering. */
 export type Row =
@@ -14,47 +15,56 @@ export type Row =
   | { kind: "group"; root: string; count: number }
   | { kind: "issue"; issue: Issue };
 
-/**
- * The effort an issue belongs to: the `<effort>` directory in its repo-relative
- * id (`.scratch/<effort>/issues/<file>.md`). The issue groups the list "by
- * run-root"; on this substrate that grouping key is the effort directory.
- * (CONTEXT.md reserves "run-root" for the root issue a run is bound to, so we
- * don't borrow the term for the directory.)
- */
-export function effortOf(id: string): string {
-  const parts = id.split("/");
-  return parts[1] ?? "(ungrouped)";
-}
+// --- attention rulebook (Card 4) -------------------------------------------
+// The single shared definition of "needs a human" — label state (the triage
+// role) PLUS agent state (a blocked dispatched agent). One predicate, consumed
+// by both the display layer (the ☻ marker) and the notification diff (the
+// toast); they differ by the returned kind, never by a separate membership test.
 
 /** The canonical labels that mean "a human must look at this" (CONTEXT.md: attention). */
 export const HUMAN_ROLES: ReadonlySet<string> = new Set(["ready-for-human", "needs-info", "needs-triage"]);
 
+/** The human labels that also raise a herdr notification (issue 13). */
+const NOTIFY_LABELS: ReadonlySet<string> = new Set(["ready-for-human"]);
+
 /**
- * True when the issue's triage role is a human label (CONTEXT.md: attention) —
- * `ready-for-human` / `needs-info` / `needs-triage`. The single shared
- * definition of "human turn by LABEL"; the display layer's `isHumanTurn` adds
- * the agent-`blocked` path on top (label state PLUS agent state).
+ * What an issue needs from a human right now:
+ *  - `"notify"` — a `ready-for-human` triage role, or a dispatched agent that
+ *    went `blocked`: shows the pulsing ☻ marker AND raises the toast
+ *    (CONTEXT.md: Attention lane — label state PLUS agent state).
+ *  - `"human"` — the inline ☻ marker only (`needs-info` / `needs-triage` are
+ *    attention-lane but never raise a notification, spec.md:234).
+ *  - `null` — no human needed.
+ *
+ * `issue` is null when only an agent state is in hand (an issue id without its
+ * record, e.g. an orphan pane); the blocked path still fires.
  */
-export function isLabelHumanTurn(issue: Issue): boolean {
-  return HUMAN_ROLES.has(triageOf(issue));
+export function attention(issue: Issue | null, agentStatus?: AgentStatus): "human" | "notify" | null {
+  if (agentStatus === "blocked") return "notify";
+  if (!issue) return null;
+  const label = triageOf(issue);
+  if (NOTIFY_LABELS.has(label)) return "notify";
+  if (HUMAN_ROLES.has(label)) return "human";
+  return null;
 }
 
-/** The leading decimal digits of an id's filename, or null when it has none. */
-function numPrefixRaw(id: string): string | null {
-  const file = id.split("/").pop() ?? id;
-  return file.match(/^(\d+)/)?.[1] ?? null;
+/** The row's short `#id` label — read from the record's adapter-owned `num`,
+ *  never parsed here (Card 2). */
+export function issueLabel(issue: Issue): string {
+  return `#${issue.num}`;
 }
 
-/** Short label for an issue: the numeric prefix from its filename, else id tail. */
-export function issueNum(id: string): string {
-  const raw = numPrefixRaw(id);
-  return raw ? `#${raw}` : `#${(id.split("/").pop() ?? id).replace(/\.md$/, "")}`;
-}
-
-/** The leading decimal number in an id's filename, else max (sorts last). */
-export function issueNumber(id: string): number {
-  const raw = numPrefixRaw(id);
-  return raw ? parseInt(raw, 10) : Number.MAX_SAFE_INTEGER;
+/**
+ * Match a tracker-supplied blocker ref (a full id or a bare numeric prefix like
+ * `"05"`) to its short `#label`. Refs arrive from the tracker as raw strings,
+ * so this one id-format rule lives on the policy side — the adapter could fully
+ * resolve refs at parse time (a future seam test); policy still compares by
+ * label.
+ */
+export function refLabel(ref: string): string {
+  const file = ref.split("/").pop() ?? ref;
+  const digits = file.match(/^(\d+)/)?.[1];
+  return digits ? `#${digits}` : `#${file.replace(/\.md$/, "")}`;
 }
 
 /** The triage role label for an issue (first non-wayfinder label, else needs-triage). */
@@ -64,9 +74,7 @@ export function triageOf(issue: Issue): string {
 
 /** Sort issues by run-root then title (stable display order across reloads). */
 export function sortIssues(issues: Issue[]): Issue[] {
-  return [...issues].sort((a, b) =>
-    (effortOf(a.id) + a.title).localeCompare(effortOf(b.id) + b.title),
-  );
+  return [...issues].sort((a, b) => (a.effort + a.title).localeCompare(b.effort + b.title));
 }
 
 export interface RowsState {
@@ -87,7 +95,7 @@ export function buildRows(state: RowsState): Row[] {
   let current = "";
   let currentGroup: Extract<Row, { kind: "group" }> | null = null;
   for (const issue of state.issues) {
-    const root = effortOf(issue.id);
+    const root = issue.effort;
     if (root !== current) {
       current = root;
       currentGroup = { kind: "group", root, count: 0 };
@@ -101,17 +109,16 @@ export function buildRows(state: RowsState): Row[] {
 
 /**
  * Is a blockedBy id resolved for `issue`, per the loaded issue set? A blocker id
- * is matched as a full id first, else by its numeric prefix — but only against
+ * is matched as a full id first, else by its `refLabel` — but only against
  * issues in the same effort directory, so `"05"` in two efforts can't resolve
  * each other's blockers. An id that resolves to nothing is unresolved.
  */
 export function blockerResolved(blockerId: string, issue: Issue, issues: Issue[]): boolean {
   const exact = issues.find((i) => i.id === blockerId);
   if (exact) return exact.status === "resolved";
-  const num = issueNum(blockerId);
-  const effort = effortOf(issue.id);
+  const num = refLabel(blockerId);
   return issues.some(
-    (i) => i.status === "resolved" && effortOf(i.id) === effort && issueNum(i.id) === num,
+    (i) => i.status === "resolved" && i.effort === issue.effort && issueLabel(i) === num,
   );
 }
 

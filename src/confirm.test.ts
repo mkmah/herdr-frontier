@@ -20,7 +20,7 @@ const ctx: ConfirmationCtx = {
   hasController: true,
   dispatchable: true,
   runningRuns: 2,
-  issueId: ".scratch/herdr-frontier/issues/05-confirm.md",
+  issueLabel: "#05",
   issueTitle: "Confirm rulebook",
   runRoot: "herdr-frontier",
   concurrency: 3,

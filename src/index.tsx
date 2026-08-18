@@ -15,6 +15,7 @@ import { onMount } from "solid-js";
 import { join } from "node:path";
 import { LocalMarkdownProvider } from "./tracker/local-markdown.js";
 import { App } from "./App.js";
+import { ShellController } from "./shell.js";
 import { claimHerdrPrefix } from "./prefix.js";
 import { HerdrClient, makeProcessRunner } from "./herdr-client.js";
 import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
@@ -53,7 +54,23 @@ const runController = new RunController({
   provider,
   coordinator: dispatchCoordinator,
   store: new FileRunStore({ dir: join(pluginStateDir(), "runs") }),
-  transcripts: new TranscriptIngester({ client, provider, repoRoot, config: config.transcripts }),
+  transcripts: new TranscriptIngester({
+    client,
+    provider,
+    repoRoot,
+    transcriptPath: provider.structuredTranscriptPath.bind(provider),
+    config: config.transcripts,
+  }),
+});
+// Architecture review 2026-08 (candidate 1): the shell controller — the deep
+// module behind the primary shell's behavior (the Confirmable verbs, the
+// confirmation gate, and the load/poll pipeline). App is the thin render
+// adapter over this seam; the controller is signal-free.
+const shell = new ShellController({
+  provider,
+  coordinator: dispatchCoordinator,
+  runController,
+  confirmPolicy: config.confirm,
 });
 
 function Root() {
@@ -61,15 +78,7 @@ function Root() {
   const renderer = useRenderer();
   onMount(() => claimHerdrPrefix(renderer));
 
-  return (
-    <App
-      provider={provider}
-      dispatchCoordinator={dispatchCoordinator}
-      runController={runController}
-      confirmPolicy={config.confirm}
-      onQuit={() => renderer.destroy()}
-    />
-  );
+  return <App shell={shell} onQuit={() => renderer.destroy()} />;
 }
 
 void render(() => <Root />);

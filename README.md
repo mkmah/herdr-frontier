@@ -22,18 +22,19 @@ You need [herdr](https://herdr.dev) 0.8.0 or later. Bun is required only at inst
 (the plugin compiles itself on your machine); the resulting binary runs with no Bun.
 
 ```bash
-herdr plugin install mkmah/herdr-frontier
+herdr plugin install mkmah/herdr-frontier --ref v0.2.0
 ```
 
-> If the pane opens and closes instantly, update to the fixed release: the first
-> 0.1.0 build shipped a `bunfig.toml` that the compiled binary re-reads and dies on.
-> herdr has no `plugin update` command, so uninstall and reinstall to pull the new
-> release (your `herdr-frontier` keybindings in `config.toml` keep working — the
-> plugin id is unchanged):
+> The `--ref` pins the checkout to a git tag, so an install is always a known-good
+> revision. To pull a fix or feature, reinstall the tags set (the plugin id is
+> unchanged, so your `herdr-frontier` keybindings in `config.toml` keep working).
+> If the pane opened and closed instantly on the first 0.1.0 build, that was a
+> shipped `bunfig.toml` the compiled binary re-reads and dies on — update to the
+> fixed release:
 >
 > ```bash
 > herdr plugin uninstall herdr-frontier
-> herdr plugin install mkmah/herdr-frontier
+> herdr plugin install mkmah/herdr-frontier --ref v0.2.0
 > ```
 
 In any herdr workspace that hosts issues under its own `.scratch/<feature>/issues/`, open

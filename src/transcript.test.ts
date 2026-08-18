@@ -13,12 +13,12 @@ import { join } from "node:path";
 import {
   DEFAULT_READ_LINES,
   extractResult,
-  structuredTranscriptPath,
   TranscriptIngester,
   type IngestOutcome,
 } from "./transcript.js";
 import { HerdrClient, type HerdrRunner } from "./herdr-client.js";
 import { AlreadyClaimed, type Issue, type IssueDetail, type TrackerProvider } from "./tracker/provider.js";
+import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
 
 // --- pure extractor ---------------------------------------------------------
 
@@ -65,20 +65,18 @@ describe("extractResult — chrome-stripping the last meaningful line (issue 17)
   });
 });
 
-describe("structuredTranscriptPath — where a richer transcript lives", () => {
-  it("maps an issue file to its transcripts/ sibling under the same effort", () => {
-    expect(structuredTranscriptPath(".scratch/herdr-frontier/issues/12-driver.md")).toBe(
-      ".scratch/herdr-frontier/transcripts/12-driver.md",
-    );
-  });
-});
-
 // --- ingester ---------------------------------------------------------------
+// The structured-transcript path (\`.scratch/<effort>/transcripts/\`) is the
+// adapter's layout (Card 2) — its sibling-path test lives in
+// local-markdown.test.ts; here the ingester receives the path via deps.
 
 const ISSUE_ID = ".scratch/herdr-frontier/issues/12-driver.md";
 const AGENT_NAME = "herdr-frontier-12";
 
 const SNAPSHOT = ["terminal chrome", "", "resolved #12 — the driver is wired", ""].join("\n");
+
+/** The adapter's sibling-transcript layout, mirrored for the recording provider. */
+const transcriptPath = (id: string) => id.replace("/issues/", "/transcripts/");
 
 function fixtureRunner(fixtures: Record<string, string>): { runner: HerdrRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -105,6 +103,9 @@ class RecordingProvider implements TrackerProvider {
   async readIssue(): Promise<IssueDetail> {
     return {
       id: ISSUE_ID,
+      effort: idEffort(ISSUE_ID),
+      num: idNum(ISSUE_ID),
+      order: idOrder(ISSUE_ID),
       title: "12 — Driver",
       status: this.status,
       type: "task",
@@ -151,6 +152,7 @@ async function ingesterWith(over: Partial<ConstructorParameters<typeof Transcrip
     client,
     provider,
     repoRoot,
+    transcriptPath,
     config: {},
     ...over,
   });
@@ -219,7 +221,7 @@ describe("TranscriptIngester — extract a finished run and write it back (issue
       [snapshotFixture()]: JSON.stringify({ id: "x", result: { read: { text: "╭────╮\n│ idle │\n╰────╯\n" } } }),
     });
     const client = new HerdrClient({ runner });
-    const ingester = new TranscriptIngester({ client, provider: h.provider, repoRoot: h.repoRoot, config: {} });
+    const ingester = new TranscriptIngester({ client, provider: h.provider, repoRoot: h.repoRoot, transcriptPath, config: {} });
     const outcome = await ingester.ingest({ id: ISSUE_ID, kind: "opencode", agentName: AGENT_NAME });
     expect(outcome).toEqual({ wrote: "none", result: null });
     expect(h.provider.commented).toEqual([]);
@@ -236,7 +238,7 @@ describe("TranscriptIngester — extract a finished run and write it back (issue
     const provider = new RecordingProvider();
     const repoRoot = await mkdtemp(join(tmpdir(), "beads-tr-"));
     repoRoots.push(repoRoot);
-    const ingester = new TranscriptIngester({ client, provider, repoRoot, config: {}, lines });
+    const ingester = new TranscriptIngester({ client, provider, repoRoot, transcriptPath, config: {}, lines });
     const outcome = await ingester.ingest({ id: ISSUE_ID, kind: "opencode", agentName: AGENT_NAME });
     expect(outcome.wrote).toBe("comment");
     expect(calls.map((c) => c.join(" "))).toEqual([`agent read ${AGENT_NAME} --lines ${lines}`]);
