@@ -62,8 +62,8 @@ bun run policy:check
 ## Adding a tracker adapter
 
 A new tracker means one new `TrackerProvider` implementation under
-`src/tracker/` plus a label-map. The contract (8 verbs) is fixed in ADR-0001
+`src/services/tracker/` plus a label-map. The contract (8 verbs) is fixed in ADR-0001
 and enforced by the shared contract tests — write the adapter against
-`src/tracker/local-markdown.ts` as the reference, then run `bun test`. Open a
+`src/services/tracker/local-markdown.ts` as the reference, then run `bun test`. Open a
 "Tracker adapter" issue first so the tracker's native label strings and id
 shape are agreed before the code lands.

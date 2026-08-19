@@ -16,6 +16,14 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
+    // Path alias — `#/` → `src/` (imports under the project root use the alias
+    // instead of relative hops; bun + tsc both honor this from tsconfig).
+    // No `baseUrl`: since TS 4.1 `paths` entries resolve relative to this file
+    // (and `baseUrl` is deprecated in TS 6/7).
+    "paths": {
+      "#/*": ["./src/*"]
+    },
+
     // Best practices
     "strict": true,
     "skipLibCheck": true,

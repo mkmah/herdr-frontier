@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun run --preload @opentui/solid/preload --watch src/index.tsx",
     "build": "bun run scripts/build.ts",
-    "policy:check": "bun run src/policy-check.ts",
+    "policy:check": "bun run scripts/policy-check.ts",
     "changeset": "changeset",
     "version": "changeset version && bun scripts/sync-version.ts",
     "release": "bun scripts/release.ts"
