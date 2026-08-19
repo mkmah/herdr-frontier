@@ -34,15 +34,20 @@ export interface IssueRowProps {
   depth?: number;
   branch?: string;
   rowId?: string;
+  /** The tree's live fold chevron (`▾` expanded / `▸` folded) painted before
+   *  the branch connector; a node with no children passes none and shows no
+   *  chevron (collapsible-categories 03). */
+  chevron?: string;
 }
 
 export const IssueRow: Component<IssueRowProps> = (p) => {
-  const key = () => `${p.selected ? 1 : 0}|${p.pulse ? 1 : 0}|${p.innerW}|${p.depth ?? 0}`;
+  const key = () => `${p.selected ? 1 : 0}|${p.pulse ? 1 : 0}|${p.innerW}|${p.depth ?? 0}|${p.chevron ?? "-"}`;
   return (
     <Show when={key()} keyed>
       {() => {
         const issue = p.issue;
         const depth = p.depth ?? 0;
+        const chevron = p.chevron;
         const ic = iconFor(issue, p.isResolved, p.agentStatus);
         const human = ic.state === "human";
         const idStr = issueLabel(issue);
@@ -50,12 +55,13 @@ export const IssueRow: Component<IssueRowProps> = (p) => {
         const tasksDone = !!issue.tasks && issue.tasks.done >= issue.tasks.total;
         const ageStr = issue.updatedAt != null ? humanizeAge(issue.updatedAt, Date.now()) : "";
         // Reserve every non-collapsing segment (`#id`, tasks, age, the tree's
-        // branch connector and depth padding) at full width; only the title
-        // flexes into what remains, floored at 0 so a narrow pane truncates
-        // rather than wrap the row to a second line (issue 16).
+        // branch connector, fold chevron, and depth padding) at full width; only
+        // the title flexes into what remains, floored at 0 so a narrow pane
+        // truncates rather than wrap the row to a second line (issue 16).
         const budget = rowTitleBudget({
           innerW: p.innerW,
           branchLen: p.branch ? p.branch.length : 0,
+          chevronLen: chevron ? chevron.length + 1 : 0,
           idLen: idStr.length,
           tasksLen: tasksStr.length,
           ageLen: ageStr.length,
@@ -70,6 +76,9 @@ export const IssueRow: Component<IssueRowProps> = (p) => {
             backgroundColor={p.selected ? THEME.selBg : undefined}
             onMouseDown={p.onMouseDown}
           >
+            {chevron ? (
+              <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD} flexShrink={0}>{`${chevron} `}</text>
+            ) : null}
             {p.branch ? (
               <text fg={THEME.border.idle} attributes={TextAttributes.BOLD} flexShrink={0}>{p.branch}</text>
             ) : null}

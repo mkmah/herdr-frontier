@@ -16,7 +16,7 @@ import type { Focus } from "#/lib/display.js";
 import type { AppView } from "#/types.js";
 import { buildRows, categorySummary, groupId, type CategorySummary, type Row } from "#/lib/rows.js";
 import { moveCursor } from "#/lib/format.js";
-import { buildForest, flattenForest } from "#/lib/tree.js";
+import { buildForest, foldForest } from "#/lib/tree.js";
 
 export function useSelection(args: {
   issues: () => Issue[];
@@ -32,6 +32,10 @@ export function useSelection(args: {
   /** Categories folded on first render (test seam) — production starts with
    *  every category expanded (collapsible-categories 02). */
   initialCollapsed?: string[];
+  /** Tree nodes folded on first render (test seam) — the one-shot renderer
+   *  can't press Space, so the tree smokes seed the fold set (production starts
+   *  with every node expanded — collapsible-categories 03). */
+  initialTreeCollapsed?: string[];
 }) {
   const [view, setView] = createSignal<AppView>(args.initialView ?? "list");
   const [focus, setFocus] = createSignal<Focus>("list");
@@ -42,6 +46,12 @@ export function useSelection(args: {
   // the issues signal, so fold state survives them; only a process restart
   // (this signal's birth) resets it.
   const [collapsed, setCollapsed] = createSignal<Set<string>>(new Set(args.initialCollapsed ?? []));
+  // The tree view's session-only fold set, keyed per issue id
+  // (collapsible-categories 03): every node starts expanded, `r` reload and the
+  // ~2s poll touch only the issues signal, so fold state survives them; only a
+  // process restart (this signal's birth) resets it. Keyed per issue id so
+  // switching categories never spills one tree's folds into another.
+  const [treeCollapsed, setTreeCollapsed] = createSignal<Set<string>>(new Set(args.initialTreeCollapsed ?? []));
   // Scrollbox refs — auto-scroll the cursor row into view: the list pane's on
   // cursor movement, the tree's on tree-cursor movement (issue 15 / 16).
   let listScroll: any = null;
@@ -85,7 +95,7 @@ export function useSelection(args: {
     return row.kind === "group" ? row.root : row.issue.effort;
   });
   const treePool = createMemo(() => args.issues().filter((i) => i.effort === treeEffort()));
-  const treeRows = createMemo(() => flattenForest(buildForest(treePool())));
+  const treeRows = createMemo(() => foldForest(buildForest(treePool()), treeCollapsed()));
   const treeSelected = () => treeRows()[treeCursor()]?.issue;
   // The currently selected issue — view-aware, shared by the detail pane, the
   // dispatch/release/run verbs, and the footer. In the list view it is the
@@ -166,12 +176,44 @@ export function useSelection(args: {
     setCollapsed(next);
   }
 
-  // The `collapse` action: fold/unfold the category under the list cursor — a
-  // header when a category is selected, else the selected issue's containing
-  // category. In the tree view it's a no-op for now (ticket 03 owns the tree's
-  // node-level fold, which rides the same `collapse` mapping).
+  // The tree view's fold toggle (collapsible-categories 03): fold/unfold the
+  // selected node's subtree. A leaf's Space is a no-op — only a node with
+  // children can fold (the builder mirrors this, so a leaf can never carry a
+  // fold flag). Folding the selected node keeps its own row (the visible anchor
+  // at that position), so the cursor stays put; folding a node that is an
+  // *ancestor* of the selection — reachable only through model drift, since
+  // Space always folds the cursor's own row — clamps the cursor onto that
+  // ancestor, mirroring the list view's clamp rule, so selection never points
+  // at a hidden node. Unfolding reveals the subtree below the cursor.
+  function treeFoldSelected() {
+    const row = treeRows()[treeCursor()];
+    if (!row || !row.hasChildren) return;
+    const id = row.issue.id;
+    const wasFolded = treeCollapsed().has(id);
+    const next = new Set(treeCollapsed());
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setTreeCollapsed(next);
+    // The model-consistency rule (story 24): folding never leaves the selection
+    // pointing at a hidden node — the cursor anchors onto the fold point. In
+    // the normal path Space folds the cursor's own row, whose row stays at the
+    // same index, so this is a no-op; it only moves the cursor if state drift
+    // put the selection somewhere inside the just-folded subtree.
+    if (!wasFolded) {
+      const anchor = treeRows().findIndex((r) => r.issue.id === id);
+      if (anchor >= 0 && treeCursor() !== anchor) setTreeCursor(anchor);
+    }
+  }
+
+  // The `collapse` action: fold/unfold the row under the cursor — a category in
+  // the list view (a header, or the selected issue's containing category), the
+  // selected node in the tree view (collapsible-categories 03). The tree fold
+  // rides the same shared `collapse` key mapping.
   function collapseSelected() {
-    if (view() === "tree") return;
+    if (view() === "tree") {
+      treeFoldSelected();
+      return;
+    }
     const root = rootOfRow(selectedRow());
     if (root) toggleCollapse(root);
   }

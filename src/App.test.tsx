@@ -322,6 +322,10 @@ describe("logic: rowTitleBudget — non-collapsing segments, floor at 0 (issue 1
     const base = { innerW: 60, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0 };
     expect(rowTitleBudget({ ...base, depth: 2 })).toBe(rowTitleBudget({ ...base, depth: 0 }) - 4);
   });
+  it("reserves the fold chevron so the title never collides with it", () => {
+    const base = { innerW: 60, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0, depth: 0 };
+    expect(rowTitleBudget({ ...base, chevronLen: 2 })).toBe(rowTitleBudget(base) - 2);
+  });
 });
 
 
@@ -688,6 +692,52 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("/wayfinder .scratch/herdr-frontier/issues/01-a.md");
     // the primary list pane is not in this view
     expect(frame).not.toContain(" Issues ");
+    setup.renderer.destroy();
+  });
+
+  // collapsible-categories 03 acceptance (Seam 4): the initial-tree-collapsed
+  // seam paints the node-level fold directly — a folded node keeps its row with
+  // the `▸` chevron and none of its descendants; an expanded parent shows the
+  // live `▾` chevron; a leaf shows no chevron at all. Keyboard interaction
+  // (Space ↔ Enter) lives in the pure seams (foldForest + appKeyAction), not
+  // here — the one-shot renderer can't press keys.
+  it("paints chevron-tagged tree rows — ▾ expanded parents, ▸ folded nodes, pruned subtrees", async () => {
+    const root = mk({
+      id: ".scratch/herdr-frontier/issues/01-a.md",
+      title: "01 — Alpha",
+    });
+    const child = mk({
+      id: ".scratch/herdr-frontier/issues/02-b.md",
+      title: "02 — Beta",
+      blockedBy: ["01"],
+    });
+    const grand = mk({
+      id: ".scratch/herdr-frontier/issues/03-c.md",
+      title: "03 — Gamma",
+      blockedBy: ["02"],
+    });
+    const detail: IssueDetail = { ...root, body: "", comments: [] };
+    const setup = await testRender(
+      () => (
+        <App
+          shell={noopShell}
+          initialIssues={[root, child, grand]}
+          initialDetail={detail}
+          initialView="tree"
+          initialTreeCollapsed={[child.id]}
+        />
+      ),
+      { width: 80, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the expanded parent paints ▾, the folded node paints ▸
+    expect(frame).toContain("▾");
+    expect(frame).toContain("▸");
+    // the folded node keeps its row; its descendant is pruned from the tree
+    expect(frame).toContain("Alpha");
+    expect(frame).toContain("Beta");
+    expect(frame).not.toContain("Gamma");
     setup.renderer.destroy();
   });
 

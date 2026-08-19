@@ -66,6 +66,10 @@ export interface AppProps {
    *  can't press Space, so smokes seed the fold set (production starts with
    *  every category expanded). */
   initialCollapsed?: string[];
+  /** Tree nodes folded on first render (test seam) — the tree view's fold
+   *  state, keyed per issue id; production starts with every node expanded
+   *  (collapsible-categories 03). */
+  initialTreeCollapsed?: string[];
   /** The confirmation dialog already open on first render (test seam — paints
    *  the overlay over the two-pane shell, mirroring initialIssues/initialDetail);
    *  production starts with no dialog open. */
@@ -107,6 +111,7 @@ export const App: Component<AppProps> = (props) => {
     initialView: props.initialView,
     initialCursor: props.initialCursor,
     initialCollapsed: props.initialCollapsed,
+    initialTreeCollapsed: props.initialTreeCollapsed,
     // The category summary's your-turn count — the same predicate the header's
     // counters use (attention + live agent state).
     isAttention: (issue) => attention(issue, agentStatusOf(issue)) !== null,
