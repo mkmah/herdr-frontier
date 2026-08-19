@@ -2,9 +2,11 @@
 // selection-driven verb (architecture review 2026-08, layered-frontend layout):
 // the primary/secondary view switch (`t`), the list cursor over the grouped
 // rows, the tree cursor over the flattened forward-forest rows (issue 15), the
-// pane focus (border reflects it), and the derived glossary the rest of the
-// shell reads (`selected`, `shown`, `treeEffort`…). Also owns the two panes'
-// scrollbox refs and the auto-scroll-into-view effects (issue 15 / 16).
+// pane focus (border reflects it), the session-only collapse set that drives
+// the fold-aware visible row list (collapsible-categories 02), and the derived
+// glossary the rest of the shell reads (`selected`, `shown`, `treeEffort`…).
+// Also owns the two panes' scrollbox refs and the auto-scroll-into-view
+// effects (issue 15 / 16).
 //
 // Extracted from App.tsx so the composition root stays a thin wire-up of hooks.
 
@@ -12,7 +14,7 @@ import { createMemo, createSignal, createEffect } from "solid-js";
 import type { Issue } from "#/services/tracker/provider.js";
 import type { Focus } from "#/lib/display.js";
 import type { AppView } from "#/types.js";
-import { buildRows, categorySummary, type CategorySummary } from "#/lib/rows.js";
+import { buildRows, categorySummary, groupId, type CategorySummary, type Row } from "#/lib/rows.js";
 import { moveCursor } from "#/lib/format.js";
 import { buildForest, flattenForest } from "#/lib/tree.js";
 
@@ -27,17 +29,27 @@ export function useSelection(args: {
   isAttention: (issue: Issue) => boolean;
   /** Initial list cursor (test seam — the one-shot renderer can't move it). */
   initialCursor?: number;
+  /** Categories folded on first render (test seam) — production starts with
+   *  every category expanded (collapsible-categories 02). */
+  initialCollapsed?: string[];
 }) {
   const [view, setView] = createSignal<AppView>(args.initialView ?? "list");
   const [focus, setFocus] = createSignal<Focus>("list");
   const [cursor, setCursor] = createSignal(args.initialCursor ?? 0);
   const [treeCursor, setTreeCursor] = createSignal(0);
+  // The session-only collapse set, keyed by effort name (collapsible-categories
+  // 02): every category starts expanded, `r` reload and the ~2s poll touch only
+  // the issues signal, so fold state survives them; only a process restart
+  // (this signal's birth) resets it.
+  const [collapsed, setCollapsed] = createSignal<Set<string>>(new Set(args.initialCollapsed ?? []));
   // Scrollbox refs — auto-scroll the cursor row into view: the list pane's on
   // cursor movement, the tree's on tree-cursor movement (issue 15 / 16).
   let listScroll: any = null;
   let treeScroll: any = null;
 
-  const rows = createMemo(() => buildRows({ issues: args.issues(), loaded: args.loaded(), error: args.error() }));
+  const rows = createMemo(() =>
+    buildRows({ issues: args.issues(), loaded: args.loaded(), error: args.error() }, collapsed()),
+  );
   // The cursor indexes the visible row list (headers + issues interleaved), so
   // it rests on category headers like ordinary rows. A header's row yields the
   // whole-category selection — no issue. The selection hook owns this
@@ -117,11 +129,69 @@ export function useSelection(args: {
     if (idx >= 0) setCursor(idx);
   }
 
+  // The category a row belongs to: the root of a header, the effort of an
+  // issue's containing category, or null for a status row — the collapse logic's
+  // one membership test (a header and its issues are all "in" the same root).
+  function rootOfRow(row: Row | undefined): string | null {
+    if (!row) return null;
+    if (row.kind === "group") return row.root;
+    if (row.kind === "issue") return row.issue.effort;
+    return null;
+  }
+
+  /** The visible list's row index of a category's header, or -1. */
+  const groupIndex = (root: string) => rows().findIndex((r) => r.kind === "group" && r.root === root);
+
+  function selectCategory(root: string) {
+    // The mouse selects a whole category — move the cursor onto its header row.
+    const idx = groupIndex(root);
+    if (idx >= 0) setCursor(idx);
+  }
+
+  // The collapse toggle (collapsible-categories 02): fold/unfold one category
+  // by effort name. Folding the category holding the selected row clamps the
+  // cursor onto its header — the visible anchor at that position — so selection
+  // never points into the hidden issue rows. The header's row index is stable
+  // across the fold (everything before it is untouched), so it is computed from
+  // the pre-fold rows.
+  function toggleCollapse(root: string) {
+    const prev = collapsed();
+    const next = new Set(prev);
+    if (next.has(root)) next.delete(root);
+    else next.add(root);
+    if (next.has(root) && rootOfRow(selectedRow()) === root) {
+      const idx = groupIndex(root);
+      if (idx >= 0) setCursor(idx);
+    }
+    setCollapsed(next);
+  }
+
+  // The `collapse` action: fold/unfold the category under the list cursor — a
+  // header when a category is selected, else the selected issue's containing
+  // category. In the tree view it's a no-op for now (ticket 03 owns the tree's
+  // node-level fold, which rides the same `collapse` mapping).
+  function collapseSelected() {
+    if (view() === "tree") return;
+    const root = rootOfRow(selectedRow());
+    if (root) toggleCollapse(root);
+  }
+
+  // The `Enter` router's fact: whether the list cursor rests on a category
+  // header (a header → fold on Enter, an issue row → dispatch as before).
+  const isCategorySelected = () => selectedRow()?.kind === "group";
+
   function selectTreeById(id: string) {
     const idx = treeRows().findIndex((r) => r.issue.id === id);
     if (idx >= 0) setTreeCursor(idx);
   }
 
+  // Keep the list cursor inside the (possibly shrinking) visible row list — a
+  // fold or a poll refresh removes rows, and the cursor must never index past
+  // the last visible one (hidden issues are unreachable by construction).
+  createEffect(() => {
+    const n = rows().length;
+    setCursor((c) => Math.min(c, Math.max(0, n - 1)));
+  });
   // Keep the tree cursor inside the (possibly shrinking) forest as the poll
   // refresh changes the rows, and auto-scroll the cursor row into view.
   createEffect(() => {
@@ -142,12 +212,12 @@ export function useSelection(args: {
   });
   // Auto-scroll the list cursor into view (issue 16) — the list pane's rows
   // can outgrow the pane, so the cursor follows selection, wheel, and mouse.
-  // Group headers carry a stable `group:<root>` id so a category selection
-  // scrolls its header into view too.
+  // Group headers carry a stable groupId so a category selection scrolls its
+  // header into view too.
   createEffect(() => {
     const row = rows()[cursor()];
     if (!row || !listScroll) return;
-    const id = row.kind === "issue" ? row.issue.id : row.kind === "group" ? `group:${row.root}` : null;
+    const id = row.kind === "issue" ? row.issue.id : row.kind === "group" ? groupId(row.root) : null;
     if (id) {
       try {
         listScroll.scrollChildIntoView(id);
@@ -175,7 +245,11 @@ export function useSelection(args: {
     toggleView,
     resetCursors,
     selectById,
+    selectCategory,
     selectTreeById,
+    toggleCollapse,
+    collapseSelected,
+    isCategorySelected,
     listScrollRef: (el: any) => (listScroll = el),
     treeScrollRef: (el: any) => (treeScroll = el),
   };

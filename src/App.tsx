@@ -62,6 +62,10 @@ export interface AppProps {
    *  smokes that need a non-first-row selection seed it (production starts at
    *  row 0, the first category header). */
   initialCursor?: number;
+  /** Categories folded on first render (test seam) — the one-shot renderer
+   *  can't press Space, so smokes seed the fold set (production starts with
+   *  every category expanded). */
+  initialCollapsed?: string[];
   /** The confirmation dialog already open on first render (test seam — paints
    *  the overlay over the two-pane shell, mirroring initialIssues/initialDetail);
    *  production starts with no dialog open. */
@@ -102,6 +106,7 @@ export const App: Component<AppProps> = (props) => {
     error: data.error,
     initialView: props.initialView,
     initialCursor: props.initialCursor,
+    initialCollapsed: props.initialCollapsed,
     // The category summary's your-turn count — the same predicate the header's
     // counters use (attention + live agent state).
     isAttention: (issue) => attention(issue, agentStatusOf(issue)) !== null,
@@ -122,10 +127,13 @@ export const App: Component<AppProps> = (props) => {
     initialModal: props.initialModal ? { dialog: props.initialModal, focus: "confirm" } : null,
   });
 
-  // The shell's mouse surface (select/focus/wheel/double-click dispatch).
+  // The shell's mouse surface (select/focus/wheel/double-click dispatch;
+  // category headers select + fold on a single click).
   const pointer = usePointer({
     selectById: sel.selectById,
+    selectCategory: sel.selectCategory,
     selectTreeById: sel.selectTreeById,
+    toggleCollapse: sel.toggleCollapse,
     doDispatch: verbs.doDispatch,
     move: sel.move,
     treeMove: sel.treeMove,
@@ -155,6 +163,8 @@ export const App: Component<AppProps> = (props) => {
     view: sel.view,
     move: sel.move,
     treeMove: sel.treeMove,
+    collapse: () => sel.collapseSelected(),
+    isCategorySelected: () => sel.isCategorySelected(),
     doDispatch: verbs.doDispatch,
     doRelease: verbs.doRelease,
     startRun: verbs.startRun,
@@ -217,6 +227,7 @@ export const App: Component<AppProps> = (props) => {
               agentStatusOf={agentStatusFor}
               isResolved={resolvedFor}
               onRowMouseDown={pointer.onRowMouseDown}
+              onHeaderMouseDown={pointer.onHeaderMouseDown}
               onWheel={pointer.onListWheel}
               scrollRef={sel.listScrollRef}
             />

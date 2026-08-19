@@ -12,6 +12,7 @@ import type { Issue, IssueDetail, TrackerProvider } from "#/services/tracker/pro
 import type { AgentStatus } from "#/services/herdr/types.js";
 import {
   type ConfirmPolicy,
+  modalKeyAction,
 } from "#/lib/confirm.js";
 import {
   type DispatchCoordinator,
@@ -166,6 +167,21 @@ describe("appKeyAction — the key bindings (issue 14 stop)", () => {
     expect(appKeyAction({ name: "r" })).toBe("reload");
     expect(appKeyAction({ name: "t" })).toBe("toggle-view");
     expect(appKeyAction({ name: "z" })).toBeNull();
+  });
+
+  it("maps Space to collapse in both protocol spellings; Enter stays dispatch (collapsible-categories 02)", () => {
+    expect(appKeyAction({ name: " " })).toBe("collapse"); // raw terminal
+    expect(appKeyAction({ name: "space" })).toBe("collapse"); // kitty protocol
+    expect(appKeyAction({ name: "return" })).toBe("dispatch"); // Enter never folds from the map
+  });
+
+  it("never lets the collapse action intercept a modal's keys (the swallow routes to the modal)", () => {
+    // While a dialog is open the key handler routes EXCLUSIVELY to modalKeyAction
+    // (useKeys checks the modal first), so Space's collapse mapping is unreachable
+    // there — Space is a dead key behind the overlay, Enter stays confirm.
+    expect(modalKeyAction({ name: " " })).toBeNull();
+    expect(modalKeyAction({ name: "space" })).toBeNull();
+    expect(modalKeyAction({ name: "return" })).toBe("confirm");
   });
 
   it("makes q the sole quit key — Esc maps to no action (issue 01)", () => {

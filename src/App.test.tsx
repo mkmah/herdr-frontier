@@ -164,6 +164,92 @@ describe("logic: sortIssues + buildRows groups by run-root", () => {
   });
 });
 
+// collapsible-categories 02 — Seam 1: the fold-aware derivation. The collapsed
+// set drives the visible row list: folded categories keep their header (folded
+// flag + full count) and drop their issue rows, so the cursor indexes exactly
+// these rows and hidden issues are unreachable by construction.
+describe("logic: buildRows is fold-aware", () => {
+  it("keeps a folded category's header (folded + full count) but drops its issue rows", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null }, new Set(["a"]));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.kind)).toEqual(["group", "group", "issue"]);
+    const a = rows[0] as Extract<Row, { kind: "group" }>;
+    expect(a.root).toBe("a");
+    expect(a.folded).toBe(true);
+    expect(a.count).toBe(2);
+    const b = rows[1] as Extract<Row, { kind: "group" }>;
+    expect(b.root).toBe("b");
+    expect(b.folded).toBe(false);
+    expect(b.count).toBe(1);
+  });
+
+  it("renders an expanded category as an unfolded header + every one of its issues", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null });
+    expect(rows).toHaveLength(5);
+    const a = rows[0] as Extract<Row, { kind: "group" }>;
+    expect(a.folded).toBe(false);
+    expect(a.count).toBe(2);
+    expect(rows[1]).toMatchObject({ kind: "issue" });
+    expect(rows[2]).toMatchObject({ kind: "issue" });
+  });
+
+  it("leaves the header count unaffected by the fold state", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+    ]);
+    const countOf = (rows: Row[]) => {
+      const g = rows.find((r): r is Extract<Row, { kind: "group" }> => r.kind === "group")!;
+      return g.count;
+    };
+    expect(countOf(buildRows({ issues, loaded: true, error: null }))).toBe(2);
+    expect(countOf(buildRows({ issues, loaded: true, error: null }, new Set(["a"])))).toBe(2);
+  });
+
+  it("interleaves multiple categories correctly under partial folds", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+      mk({ id: ".scratch/c/issues/4.md", title: "4" }),
+      mk({ id: ".scratch/c/issues/5.md", title: "5" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null }, new Set(["b"]));
+    expect(rows).toHaveLength(7);
+    expect(
+      rows.map((r) => (r.kind === "group" ? `group:${r.root}` : "issue")),
+    ).toEqual(["group:a", "issue", "issue", "group:b", "group:c", "issue", "issue"]);
+  });
+
+  it("leaves error and empty states untouched by the collapse set", () => {
+    expect(buildRows({ issues: [], loaded: true, error: "boom" }, new Set(["a"]))).toEqual([
+      { kind: "error", message: "boom" },
+    ]);
+    expect(buildRows({ issues: [], loaded: false, error: null }, new Set(["a"]))).toEqual([]);
+    expect(buildRows({ issues: [], loaded: true, error: null }, new Set(["a"]))).toEqual([{ kind: "empty" }]);
+  });
+
+  it("emits exactly the rows the cursor walks — a folded category is one row", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    expect(buildRows({ issues, loaded: true, error: null }, new Set(["a"]))).toHaveLength(3);
+    expect(buildRows({ issues, loaded: true, error: null }, new Set(["a", "b"]))).toHaveLength(2);
+  });
+});
+
 describe("logic: categorySummary — the selected category's detail facts", () => {
   it("counts all issues, open issues, and attention issues under one root", () => {
     const open = mk({ id: ".scratch/e/issues/01-a.md", status: "open", title: "01 — A" });
@@ -366,6 +452,46 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("2 issues · 2 open · 1 your-turn");
     // adjacent categories and their issues still paint as ordinary rows
     expect(frame).toContain("auth-spec");
+    expect(frame).toContain("03 — Token");
+    setup.renderer.destroy();
+  });
+
+  // collapsible-categories 02 acceptance (Seam 4): the initial-collapsed seam
+  // paints the folded state directly — a folded category shows its header with
+  // the folded chevron (`▸`) and its full count, and none of its issue rows;
+  // an expanded category shows the live `▾` chevron with its issues. Keyboard/
+  // mouse interaction lives in the pure seams (buildRows + appKeyAction), not
+  // here — the one-shot renderer can't press keys.
+  it("paints a folded header (▸, full count, no issue rows) and an expanded header's ▾ with its issues", async () => {
+    const first = mk({
+      id: ".scratch/herdr-frontier/issues/01-impl.md",
+      title: "01 — Impl",
+      status: "open",
+      labels: ["ready-for-agent"],
+    });
+    const second = mk({
+      id: ".scratch/herdr-frontier/issues/02-human.md",
+      title: "02 — Human",
+      status: "open",
+      labels: ["ready-for-human"],
+    });
+    const other = mk({
+      id: ".scratch/auth-spec/issues/03-token.md",
+      title: "03 — Token",
+    });
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[first, second, other]} initialCollapsed={["herdr-frontier"]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the folded header paints ▸ with its full count — and none of its issues
+    expect(frame).toContain("▸ herdr-frontier");
+    expect(frame).toContain("2 issues · 2 open · 1 your-turn");
+    expect(frame).not.toContain("01 — Impl");
+    expect(frame).not.toContain("02 — Human");
+    // the expanded category paints ▾ with its issues
+    expect(frame).toContain("▾ auth-spec");
     expect(frame).toContain("03 — Token");
     setup.renderer.destroy();
   });

@@ -20,6 +20,13 @@ export function useKeys(args: {
   view: () => AppView;
   move: (dir: number) => void;
   treeMove: (dir: number) => void;
+  /** The `collapse` action handler — folds the category under the list cursor
+   *  (collapsible-categories 02); the tree's node-level fold rides the same
+   *  action (ticket 03). */
+  collapse: () => void;
+  /** Whether the list cursor rests on a category header — the `Enter` router's
+   *  fact (a header folds on Enter, an issue row dispatches as before). */
+  isCategorySelected: () => boolean;
   doDispatch: () => void;
   doRelease: () => void;
   startRun: () => void;
@@ -74,7 +81,12 @@ export function useKeys(args: {
         else args.move(-1);
         break;
       case "dispatch":
-        void args.doDispatch();
+        // `Enter` keeps its dispatch action in the key map; the router decides
+        // what the cursor row wants: in the list view a category header folds,
+        // an issue row dispatches as before, and the tree always dispatches
+        // (collapsible-categories 02).
+        if (args.view() === "list" && args.isCategorySelected()) args.collapse();
+        else void args.doDispatch();
         break;
       case "release":
         void args.doRelease();
@@ -90,6 +102,13 @@ export function useKeys(args: {
         break;
       case "reload":
         void args.load();
+        break;
+      case "collapse":
+        // `Space` folds/unfolds — the category under the cursor (a header, or
+        // the selected issue's containing category) in the list view; the tree
+        // view's node-level fold is ticket 03. The handler no-ops where folding
+        // points at nothing.
+        args.collapse();
         break;
     }
   });
