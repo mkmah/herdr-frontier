@@ -57,8 +57,10 @@ export const ListPane: Component<ListPaneProps> = (p) => (
               // paints the issue-selection background. Keyed remount so the
               // backgroundColor applies (OpenTUI 0.5.1 repaint quirk, same as
               // IssueRow), and a stable `group:<root>` id so the scrollbox's
-              // scrollChildIntoView can find it. `▸` stays decorative until
-              // the fold ticket gives it a live state.
+              // scrollChildIntoView can find it. The gap above the header is a
+              // *margin*, not padding: padding would paint the selection
+              // background into the whitespace above the row. `▸` stays
+              // decorative until the fold ticket gives it a live state.
               return (
                 <Show when={`${p.selectedRoot === row.root ? 1 : 0}`} keyed>
                   {(_k: string) => (
@@ -66,7 +68,7 @@ export const ListPane: Component<ListPaneProps> = (p) => (
                       id={`group:${row.root}`}
                       flexDirection="row"
                       paddingLeft={1}
-                      paddingTop={1}
+                      marginTop={1}
                       backgroundColor={p.selectedRoot === row.root ? THEME.selBg : undefined}
                     >
                       <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD}>{`▸ ${row.root}`}</text>
