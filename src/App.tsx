@@ -58,6 +58,10 @@ export interface AppProps {
   initialDetail?: IssueDetail;
   /** Initial view (test seam); production defaults to the primary list. */
   initialView?: AppView;
+  /** Initial list cursor (test seam) — the one-shot renderer can't move it, so
+   *  smokes that need a non-first-row selection seed it (production starts at
+   *  row 0, the first category header). */
+  initialCursor?: number;
   /** The confirmation dialog already open on first render (test seam — paints
    *  the overlay over the two-pane shell, mirroring initialIssues/initialDetail);
    *  production starts with no dialog open. */
@@ -86,19 +90,23 @@ export const App: Component<AppProps> = (props) => {
     onReload: () => onReloadRef.current?.(),
   });
 
+  // The live agent_status of an issue's dispatched pane (issue 13), or
+  // undefined when it isn't dispatched / its pane isn't tracked.
+  const agentStatusOf = (issue: Issue): AgentStatus | undefined => data.agentStates().get(issue.id);
+  const agentStatusFor = (id: string): AgentStatus | undefined => data.agentStates().get(id);
+
   // The view/cursor/selection state both panes and every verb share.
   const sel = useSelection({
     issues: data.issues,
     loaded: data.loaded,
     error: data.error,
     initialView: props.initialView,
+    initialCursor: props.initialCursor,
+    // The category summary's your-turn count — the same predicate the header's
+    // counters use (attention + live agent state).
+    isAttention: (issue) => attention(issue, agentStatusOf(issue)) !== null,
   });
   onReloadRef.current = sel.resetCursors;
-
-  // The live agent_status of an issue's dispatched pane (issue 13), or
-  // undefined when it isn't dispatched / its pane isn't tracked.
-  const agentStatusOf = (issue: Issue): AgentStatus | undefined => data.agentStates().get(issue.id);
-  const agentStatusFor = (id: string): AgentStatus | undefined => data.agentStates().get(id);
 
   // A blocker id ("10") resolves against the loaded issue set, scoped to the
   // referencing issue's effort so `"05"` in two efforts can't cross-match.
@@ -128,6 +136,7 @@ export const App: Component<AppProps> = (props) => {
   const detail = useIssueDetail({
     shell: props.shell,
     selected: sel.selected,
+    selectedCategory: sel.selectedCategory,
     initialDetail: props.initialDetail,
     dispatchState: verbs.dispatchState,
     releaseState: verbs.releaseState,
@@ -201,6 +210,7 @@ export const App: Component<AppProps> = (props) => {
             <ListPane
               rows={sel.rows()}
               selectedId={sel.selected()?.id ?? null}
+              selectedRoot={sel.selectedCategory()?.root ?? null}
               innerW={detail.listInnerW()}
               focused={sel.focus() === "list"}
               pulse={pulse()}

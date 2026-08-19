@@ -3,7 +3,7 @@
 // derivations (domain/rows, domain/format) fed in from App. Presentational —
 // the pane owns no state of its own.
 
-import { type Component, For } from "solid-js";
+import { type Component, For, Show } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import type { Issue } from "#/services/tracker/provider.js";
 import type { AgentStatus } from "#/services/herdr/types.js";
@@ -16,6 +16,9 @@ export interface ListPaneProps {
   rows: Row[];
   /** The id of the currently selected issue, if any (row-level selection). */
   selectedId: string | null;
+  /** The root of the selected category header, if any — the header rows paint
+   *  the same selected background an issue row does (collapsible-categories 01). */
+  selectedRoot: string | null;
   /** The row budget inner width (dims minus the scrollbox inset). */
   innerW: number;
   focused: boolean;
@@ -50,11 +53,27 @@ export const ListPane: Component<ListPaneProps> = (p) => (
             case "empty":
               return <text fg={THEME.text.dim} paddingLeft={1}> no issues found under .scratch/*/issues/</text>;
             case "group":
+              // The header is a selectable row like any other — selected it
+              // paints the issue-selection background. Keyed remount so the
+              // backgroundColor applies (OpenTUI 0.5.1 repaint quirk, same as
+              // IssueRow), and a stable `group:<root>` id so the scrollbox's
+              // scrollChildIntoView can find it. `▸` stays decorative until
+              // the fold ticket gives it a live state.
               return (
-                <box flexDirection="row" paddingLeft={1} paddingTop={1}>
-                  <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD}>{`▸ ${row.root}`}</text>
-                  <text fg={THEME.text.dim}>{`  ${row.count}`}</text>
-                </box>
+                <Show when={`${p.selectedRoot === row.root ? 1 : 0}`} keyed>
+                  {(_k: string) => (
+                    <box
+                      id={`group:${row.root}`}
+                      flexDirection="row"
+                      paddingLeft={1}
+                      paddingTop={1}
+                      backgroundColor={p.selectedRoot === row.root ? THEME.selBg : undefined}
+                    >
+                      <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD}>{`▸ ${row.root}`}</text>
+                      <text fg={THEME.text.dim}>{`  ${row.count}`}</text>
+                    </box>
+                  )}
+                </Show>
               );
             case "issue":
               return (

@@ -17,6 +17,7 @@ import { App } from "#/App.js";
 import { ShellController } from "#/services/shell/shell.js";
 import {
   buildRows,
+  categorySummary,
   type Row,
 } from "#/lib/rows.js";
 import {
@@ -147,6 +148,45 @@ describe("logic: sortIssues + buildRows groups by run-root", () => {
       { kind: "error", message: "boom" },
     ]);
   });
+
+  // collapsible-categories 01: the list cursor now indexes THIS flat list
+  // (headers interleaved with issues), so the row count is exactly what the
+  // cursor wraps over — one header per effort, every issue, one row each.
+  it("flattens to exactly the rows the cursor walks — headers + issues, in order", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null });
+    expect(rows).toHaveLength(5);
+    expect(rows.map((r) => r.kind)).toEqual(["group", "issue", "issue", "group", "issue"]);
+  });
+});
+
+describe("logic: categorySummary — the selected category's detail facts", () => {
+  it("counts all issues, open issues, and attention issues under one root", () => {
+    const open = mk({ id: ".scratch/e/issues/01-a.md", status: "open", title: "01 — A" });
+    const human = mk({ id: ".scratch/e/issues/02-b.md", status: "open", labels: ["ready-for-human"] });
+    const done = mk({ id: ".scratch/e/issues/03-c.md", status: "resolved" });
+    const other = mk({ id: ".scratch/other/issues/01-d.md" });
+    const isAttention = (i: Issue) => i.labels.includes("ready-for-human");
+    expect(categorySummary([open, human, done, other], "e", isAttention)).toEqual({
+      root: "e",
+      count: 3,
+      open: 2,
+      yourTurn: 1,
+    });
+  });
+
+  it("is all-zeros for a root with no issues", () => {
+    expect(categorySummary([mk()], "missing", () => false)).toEqual({
+      root: "missing",
+      count: 0,
+      open: 0,
+      yourTurn: 0,
+    });
+  });
 });
 
 describe("logic: moveCursor wraps and clamps", () => {
@@ -226,6 +266,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
         shell={noopShell}
         initialIssues={[first, second]}
         initialDetail={detail}
+        initialCursor={1}
       />
     ));
     // markdown body settles after its highlight round-trip — wait for it
@@ -265,7 +306,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     // markdown body settles after its highlight round-trip — wait for it
@@ -290,6 +331,45 @@ describe("App (initial render smoke — two-pane shell)", () => {
     setup.renderer.destroy();
   });
 
+  // collapsible-categories 01 acceptance: the cursor rests on category headers
+  // like ordinary rows, and the default row 0 IS the first header — so a fresh
+  // render selects a whole category and the detail pane mirrors its summary
+  // (name, count, open, your-turn) instead of showing a blank. The other panes
+  // and the header counters keep painting as before.
+  it("paints the selected category's summary in the detail pane", async () => {
+    const first = mk({
+      id: ".scratch/herdr-frontier/issues/01-impl.md",
+      title: "01 — Impl",
+      status: "open",
+      labels: ["ready-for-agent"],
+    });
+    const second = mk({
+      id: ".scratch/herdr-frontier/issues/02-human.md",
+      title: "02 — Human",
+      status: "open",
+      labels: ["ready-for-human"],
+    });
+    const other = mk({
+      id: ".scratch/auth-spec/issues/03-token.md",
+      title: "03 — Token",
+    });
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[first, second, other]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the cursor's first stop is the first category header — its summary paints
+    // in the detail pane (name + full count + open/your-turn, mirroring the
+    // header counts)
+    expect(frame).toContain("herdr-frontier");
+    expect(frame).toContain("2 issues · 2 open · 1 your-turn");
+    // adjacent categories and their issues still paint as ordinary rows
+    expect(frame).toContain("auth-spec");
+    expect(frame).toContain("03 — Token");
+    setup.renderer.destroy();
+  });
+
   // Regression: the stale-detail race. When a detail record for a differently
   // id'd issue is present while another issue is selected (the state between
   // navigation and the new read resolving), the body must not paint under the
@@ -303,7 +383,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(() => (
-      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
+      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} initialCursor={1} />
     ));
     await setup.flush();
     const frame = setup.captureCharFrame();
@@ -321,7 +401,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const tall = mk({ id: ".scratch/herdr-frontier/issues/01-x.md", title: "01 — X" });
     const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} initialCursor={1} />,
       { width: 100, height: 12 },
     );
     await setup.flush();
@@ -341,7 +421,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...impl, body: "Build the driver.", comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -357,7 +437,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const human = mk({ id: ".scratch/herdr-frontier/issues/13-human.md", labels: ["ready-for-human"] });
     const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -412,6 +492,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
           shell={runShell}
           initialIssues={[issue]}
           initialDetail={detail}
+          initialCursor={1}
         />
       ),
       { width: 120, height: 20 },

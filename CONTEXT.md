@@ -44,6 +44,10 @@ _Avoid_: Job, Pipeline.
 The root issue a run is bound to — a `wayfinder:map`, a spec, or a to-tickets set — from which the run walks the graph.
 _Avoid_: Entry point, Seed.
 
+**Category**:
+The primary shell's left-panel grouping header — one per effort directory, shown as a collapsible row (`name` + issue count) that summarizes its issues. Selecting a category (the whole category, not an issue) lets it fold/unfold; the detail pane mirrors its summary and `t` scopes the dependency tree to it. Distinct from run-root — a category is the UI grouping over an effort's issues, not the root issue.
+_Avoid_: Group (a `group` Row is the internal render record, not a user-facing term), Section, Folder-group.
+
 **Dispatch**:
 The act of sending one issue to one herdr pane via the right agent+model for its task type.
 _Avoid_: Launch (launch is the herdr mechanism; dispatch is the policy that picks the agent/model).

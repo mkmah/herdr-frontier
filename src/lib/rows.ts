@@ -16,6 +16,34 @@ export interface RowsState {
   error: string | null;
 }
 
+/** The summary the detail pane mirrors when a whole category is selected —
+ *  the group header's facts (name + full count) plus open/your-turn counts,
+ *  so a category selection shows what's inside instead of a blank. */
+export interface CategorySummary {
+  root: string;
+  count: number;
+  open: number;
+  yourTurn: number;
+}
+
+/** The detail-pane summary for one category (effort directory): every issue
+ *  under it, of which `open` are still open and `yourTurn` need a human right
+ *  now (the caller passes its attention predicate — the shell owns agent
+ *  state). `count` mirrors the header: all of the category's issues. */
+export function categorySummary(
+  issues: Issue[],
+  root: string,
+  isAttention: (issue: Issue) => boolean,
+): CategorySummary {
+  const pool = issues.filter((i) => i.effort === root);
+  return {
+    root,
+    count: pool.length,
+    open: pool.filter((i) => i.status === "open").length,
+    yourTurn: pool.filter((i) => isAttention(i)).length,
+  };
+}
+
 /**
  * Build the flat render list: an error row, an empty row, or group headers
  * interleaved with issue rows (sorted by run-root). Each top-level row maps to

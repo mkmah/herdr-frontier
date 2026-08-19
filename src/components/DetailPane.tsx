@@ -21,6 +21,25 @@ import type { DetailContentProps } from "#/types.js";
 import { Chip, RoleText } from "#/components/RoleText.js";
 
 const DetailContent: Component<DetailContentProps> = (p) => {
+  // A whole-category selection: mirror the header's summary (name + full count,
+  // plus open/your-turn) in place of any issue content — the selection shows
+  // what's inside instead of a blank (collapsible-categories 01).
+  if (p.category) {
+    const cat = p.category;
+    return (
+      <box flexDirection="column" flexGrow={1}>
+        <box flexDirection="row">
+          <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD} flexShrink={0}>▸ </text>
+          <RoleText role="h1">{cat.root}</RoleText>
+        </box>
+        <box paddingTop={1}>
+          <text fg={THEME.text.dim}>
+            {`${cat.count} issues · ${cat.open} open · ${cat.yourTurn} your-turn`}
+          </text>
+        </box>
+      </box>
+    );
+  }
   const sel = p.issue;
   if (!sel) return null;
   const detailRec = p.detail;
