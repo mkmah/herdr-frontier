@@ -1,5 +1,49 @@
 # herdr-frontier
 
+## 0.3.0
+
+### Minor Changes
+
+- [#7](https://github.com/mkmah/herdr-frontier/pull/7) [`67247a4`](https://github.com/mkmah/herdr-frontier/commit/67247a45a17d0b1f3b9488ee8ffceab2015177c1) - Add a confirmation gate in front of every action that spends money or rewrites issue
+  state, plus the `[confirm]` config table to suppress it per action.
+  
+  - **Esc no longer quits — `q` is the only quit key.** Every key that used to act
+    directly now opens a centered confirmation dialog first: `Enter` (dispatch),
+    `x` (stop the selected run), `s` (start an automated run), and `S` (stop all
+    runs). Each dialog names exactly what will run (issue `#id` + title, the run-root
+    effort, or the in-flight stop tally), with **Confirm** pre-focused, so an action
+    is two keys, not one.
+  - **Dialog keys:** `←/→`, `j/k`, and `Tab` move focus between Cancel and Confirm,
+    `Enter` activates the focused button, and `Esc`/`q` cancel (never quit). Every
+    other key is dead while the dialog is open. Mouse parity: buttons activate on
+    click; the dim overlay does nothing. Structural no-ops — nothing selected,
+    nothing running — never ask.
+  - **`[confirm]` config bypass:** `false` is the only off value for a per-action
+    gate (`dispatch`, `release`, `run_start`, `run_stop`), so an empty config keeps
+    every gate on and there is no in-dialog "don't ask again". Tables merge
+    repo-over-user like every other key.
+
+- [#7](https://github.com/mkmah/herdr-frontier/pull/7) [`67247a4`](https://github.com/mkmah/herdr-frontier/commit/67247a45a17d0b1f3b9488ee8ffceab2015177c1) - Deepen the architecture behind the shell — all internal, the UI and keybindings are
+  unchanged:
+  
+  - **The App shell is a deep module (Card 1).** A signal-free `ShellController` owns the
+    Confirmable verbs, their confirmation gate, and the load/poll reconcile pipeline;
+    App is a thin render adapter over that seam. `request` decides "ask or go", the
+    self-describing dialog carries its trigger (no stored pending action), and `confirm`
+    runs the verb. The reconcile folds claim-reconcile + dead-dispatch + attention + run
+    steps onto one `agent list` read per poll tick.
+  - **The tracker owns its id format (Card 2).** `Issue` records now carry adapter-owned
+    `effort` / `num` / `order` facts, parsed once by the local-markdown adapter; no policy
+    code parses an id anymore. The frontier and run advance sort on the record's `order`,
+    run scoping reads the record's `effort`, the display label comes from the record's
+    `num`, and the transcript ingester gets its sibling-transcript path from the provider
+    instead of splicing the id.
+  - **One attention rulebook (Card 4).** The two "needs a human" predicates — the list's
+    ☻ marker and the notification toast — are a single `attention(issue, agentStatus)`
+    predicate returning a kind: `notify` raises the toast, `human` shows only the marker.
+    The display layer and the notification diff consume the same rule, so the marker and
+    toast can never drift.
+
 ## 0.2.0
 
 ### Minor Changes
