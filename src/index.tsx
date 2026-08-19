@@ -13,16 +13,18 @@
 import { render, useRenderer } from "@opentui/solid";
 import { onMount } from "solid-js";
 import { join } from "node:path";
-import { LocalMarkdownProvider } from "./tracker/local-markdown.js";
-import { App } from "./App.js";
-import { ShellController } from "./shell.js";
-import { claimHerdrPrefix } from "./prefix.js";
-import { HerdrClient, makeProcessRunner } from "./herdr-client.js";
-import { ClaimRegistry, DispatchCoordinator } from "./dispatch.js";
-import { RunController, FileRunStore, pluginStateDir } from "./run.js";
-import { loadPluginConfig } from "./config.js";
-import { TranscriptIngester } from "./transcript.js";
-import { PLUGIN_CONTEXT_KEY, resolveRepoRoot } from "./workspace.js";
+import { LocalMarkdownProvider } from "#/services/tracker/local-markdown.js";
+import { App } from "#/App.js";
+import { ShellController } from "#/services/shell/shell.js";
+import { claimHerdrPrefix } from "#/services/prefix.js";
+import { HerdrClient, makeProcessRunner } from "#/services/herdr/client.js";
+import { ClaimRegistry } from "#/services/dispatch/claims.js";
+import { DispatchCoordinator } from "#/services/dispatch/coordinator.js";
+import { RunController, pluginStateDir } from "#/services/run/controller.js";
+import { FileRunStore } from "#/services/run/store.js";
+import { loadPluginConfig } from "#/services/config/config.js";
+import { TranscriptIngester } from "#/services/transcripts/ingester.js";
+import { PLUGIN_CONTEXT_KEY, resolveRepoRoot } from "#/services/config/workspace.js";
 
 // The workspace herdr opened the pane against (its `workspace_cwd` from
 // HERDR_PLUGIN_CONTEXT_JSON), not the pane's process cwd — herdr runs plugin

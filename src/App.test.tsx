@@ -13,22 +13,26 @@
 
 import { describe, it, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App } from "./App.js";
-import { ShellController } from "./shell.js";
+import { App } from "#/App.js";
+import { ShellController } from "#/services/shell/shell.js";
 import {
   buildRows,
+  type Row,
+} from "#/lib/rows.js";
+import {
   moveCursor,
   rowTitleBudget,
+  trunc,
+} from "#/lib/format.js";
+import {
   sortIssues,
   triageOf,
-  trunc,
-  type Row,
-} from "./logic.js";
-import type { Issue, IssueDetail, TrackerProvider } from "./tracker/provider.js";
-import type { DispatchCoordinator } from "./dispatch.js";
-import type { RunController } from "./run.js";
-import type { ConfirmDialog } from "./confirm.js";
-import { idEffort, idNum, idOrder } from "./tracker/local-markdown.js";
+} from "#/lib/issues.js";
+import type { Issue, IssueDetail, TrackerProvider } from "#/services/tracker/provider.js";
+import type { DispatchCoordinator } from "#/services/dispatch/coordinator.js";
+import type { RunController } from "#/services/run/controller.js";
+import type { ConfirmDialog } from "#/lib/confirm.js";
+import { idEffort, idNum, idOrder } from "#/services/tracker/local-markdown.js";
 
 const mk = (over: Partial<Issue> = {}): Issue => {
   const id = over.id ?? ".scratch/e/issues/01-x.md";
@@ -69,16 +73,20 @@ const noopShell = new ShellController({
 
 // The detail body paints only once OpenTUI's tree-sitter markdown highlight
 // resolves — a worker round-trip that can land a frame (or a few) after the
-// mount settles, especially on a cold or load-heavy worker. A single
+// mount settles, especially on a cold or load-heavy worker (the parser Worker
+// is lazy-spawned per process, so the first `bun test` run pays thread spawn +
+// parse-asset init — a classic first-run-only flake). A single
 // flush()/captureCharFrame() must not read that gap as "the body never
 // painted", so the markdown assertions retry capture until a body marker
-// appears and run against that settled frame.
+// appears and run against that settled frame. Budget: up to ~2s of retries —
+// warm runs settle in <200ms, so this costs nothing on the happy path, while a
+// cold first run gets ~8× the old 250ms headroom.
 async function captureSettledFrame(
   setup: Awaited<ReturnType<typeof testRender>>,
   marker: (frame: string) => boolean,
 ): Promise<string> {
   let frame = setup.captureCharFrame();
-  for (let attempt = 0; attempt < 50 && !marker(frame); attempt++) {
+  for (let attempt = 0; attempt < 400 && !marker(frame); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 5));
     await setup.flush();
     frame = setup.captureCharFrame();
