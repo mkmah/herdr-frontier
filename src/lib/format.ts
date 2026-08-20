@@ -27,6 +27,9 @@ export interface RowTitleBudgetInput {
   innerW: number;
   /** Length of the tree branch connector (`"└─ "` = 3), 0 for the list. */
   branchLen: number;
+  /** Length of the tree fold chevron (`"▾ "` = 2), 0 when the row shows none
+   *  (a list row, or a leaf tree row — collapsible-categories 03). */
+  chevronLen?: number;
   /** Rendered `#id` length (e.g. `"#09"` = 3). */
   idLen: number;
   /** Rendered tasks ratio length (`"2/4"` = 3), 0 when the issue has no tasks. */
@@ -44,6 +47,7 @@ export function rowTitleBudget(b: RowTitleBudgetInput): number {
     2 + // the two spaces before the title
     (b.tasksLen ? b.tasksLen + 1 : 0) + // tasks ratio + its leading space
     (b.ageLen ? b.ageLen + 1 : 0) + // age + its leading space
+    (b.chevronLen ?? 0) +
     b.branchLen;
   return Math.max(0, b.innerW - fixed - b.depth * 2);
 }

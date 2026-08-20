@@ -57,18 +57,46 @@ export interface TreeRow {
   depth: number;
   /** Tree connector: "" for a root, "├─ " for a non-last child, "└─ " for the last. */
   branch: string;
+  /** Whether this node's subtree is currently folded (collapsible-categories 03) —
+   *  the live chevron the render layer paints (`▾` expanded / `▸` folded). */
+  folded: boolean;
+  /** Whether this node has children in the full forest — the rows that show a
+   *  chevron at all; a leaf carries none (a leaf's fold is a no-op). */
+  hasChildren: boolean;
 }
 
-/** Flatten a forest depth-first into the lean rows the tree renders. */
-export function flattenForest(nodes: TreeNode[]): TreeRow[] {
+/**
+ * Flatten a forest depth-first into the lean rows the tree renders, applying
+ * the node-level fold (collapsible-categories 03): a row whose node id is in
+ * `collapsed` keeps its own row but prunes its descendants — exactly that
+ * subtree, nothing else. Roots and siblings stay, and because the walk sees
+ * only the remaining (visible) children at each level, the `├─`/`└─`
+ * connectors recompute off the survivors. A leaf's fold is a no-op (only a
+ * node with children can fold), and the fold state is keyed per issue id, so
+ * switching categories never spills one tree's folds into another.
+ */
+export function foldForest(nodes: TreeNode[], collapsed: ReadonlySet<string> = new Set()): TreeRow[] {
   const out: TreeRow[] = [];
   const walk = (children: TreeNode[], depth: number): void => {
     children.forEach((node, i) => {
       const last = i === children.length - 1;
-      out.push({ issue: node.issue, depth, branch: depth === 0 ? "" : last ? "└─ " : "├─ " });
-      walk(node.children, depth + 1);
+      const hasChildren = node.children.length > 0;
+      const folded = hasChildren && collapsed.has(node.issue.id);
+      out.push({
+        issue: node.issue,
+        depth,
+        branch: depth === 0 ? "" : last ? "└─ " : "├─ ",
+        folded,
+        hasChildren,
+      });
+      if (!folded) walk(node.children, depth + 1);
     });
   };
   walk(nodes, 0);
   return out;
+}
+
+/** Flatten a forest depth-first, fully expanded — the no-fold case. */
+export function flattenForest(nodes: TreeNode[]): TreeRow[] {
+  return foldForest(nodes);
 }

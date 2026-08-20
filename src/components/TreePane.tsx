@@ -12,7 +12,9 @@ import { THEME } from "#/lib/theme.js";
 import { IssueRow } from "#/components/IssueRow.js";
 
 export interface TreePaneProps {
-  /** The flattened forest rows (flattenForest(buildForest(…))). */
+  /** The flat render rows — the fold-aware tree rows (collapsible-categories 03):
+   *  `foldForest(buildForest(…), collapsed)`; a folded node keeps its own row
+   *  and prunes its descendants, and rows carry their per-node chevron state. */
   rows: TreeRow[];
   /** The id of the currently selected node, if any. */
   selectedId: string | null;
@@ -52,6 +54,7 @@ export const TreePane: Component<TreePaneProps> = (p) => (
             pulse={p.pulse}
             depth={row.depth}
             branch={row.branch}
+            chevron={row.hasChildren ? (row.folded ? "▸" : "▾") : undefined}
             rowId={row.issue.id}
             onMouseDown={(e: MouseEvent) => p.onRowMouseDown(e, row.issue.id)}
           />

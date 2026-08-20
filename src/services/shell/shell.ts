@@ -52,11 +52,14 @@ export type AppKeyAction =
   | "run-start"
   | "run-stop"
   | "toggle-view"
-  | "reload";
+  | "reload"
+  | "collapse";
 
 /** Map a parsed key event to its action. shift-`s` reaches us as `name: "s"`
  *  with `shift: true` (raw terminal) or `name: "S"` (kitty protocol); both map
- *  to stop. Returns null for keys the shell ignores. */
+ *  to stop. Space arrives as `name: " "` (raw terminal) or `name: "space"`
+ *  (kitty protocol); both map to `collapse`. Returns null for keys the shell
+ *  ignores. */
 export function appKeyAction(key: { name?: string; shift?: boolean }): AppKeyAction | null {
   if (key.name === "q") return "quit";
   if (key.name === "tab") return "focus";
@@ -68,6 +71,7 @@ export function appKeyAction(key: { name?: string; shift?: boolean }): AppKeyAct
   if (key.name === "S" || (key.name === "s" && key.shift)) return "run-stop";
   if (key.name === "t") return "toggle-view";
   if (key.name === "r") return "reload";
+  if (key.name === " " || key.name === "space") return "collapse";
   return null;
 }
 

@@ -17,6 +17,7 @@ import { App } from "#/App.js";
 import { ShellController } from "#/services/shell/shell.js";
 import {
   buildRows,
+  categorySummary,
   type Row,
 } from "#/lib/rows.js";
 import {
@@ -147,6 +148,131 @@ describe("logic: sortIssues + buildRows groups by run-root", () => {
       { kind: "error", message: "boom" },
     ]);
   });
+
+  // collapsible-categories 01: the list cursor now indexes THIS flat list
+  // (headers interleaved with issues), so the row count is exactly what the
+  // cursor wraps over — one header per effort, every issue, one row each.
+  it("flattens to exactly the rows the cursor walks — headers + issues, in order", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null });
+    expect(rows).toHaveLength(5);
+    expect(rows.map((r) => r.kind)).toEqual(["group", "issue", "issue", "group", "issue"]);
+  });
+});
+
+// collapsible-categories 02 — Seam 1: the fold-aware derivation. The collapsed
+// set drives the visible row list: folded categories keep their header (folded
+// flag + full count) and drop their issue rows, so the cursor indexes exactly
+// these rows and hidden issues are unreachable by construction.
+describe("logic: buildRows is fold-aware", () => {
+  it("keeps a folded category's header (folded + full count) but drops its issue rows", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null }, new Set(["a"]));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.kind)).toEqual(["group", "group", "issue"]);
+    const a = rows[0] as Extract<Row, { kind: "group" }>;
+    expect(a.root).toBe("a");
+    expect(a.folded).toBe(true);
+    expect(a.count).toBe(2);
+    const b = rows[1] as Extract<Row, { kind: "group" }>;
+    expect(b.root).toBe("b");
+    expect(b.folded).toBe(false);
+    expect(b.count).toBe(1);
+  });
+
+  it("renders an expanded category as an unfolded header + every one of its issues", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null });
+    expect(rows).toHaveLength(5);
+    const a = rows[0] as Extract<Row, { kind: "group" }>;
+    expect(a.folded).toBe(false);
+    expect(a.count).toBe(2);
+    expect(rows[1]).toMatchObject({ kind: "issue" });
+    expect(rows[2]).toMatchObject({ kind: "issue" });
+  });
+
+  it("leaves the header count unaffected by the fold state", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+    ]);
+    const countOf = (rows: Row[]) => {
+      const g = rows.find((r): r is Extract<Row, { kind: "group" }> => r.kind === "group")!;
+      return g.count;
+    };
+    expect(countOf(buildRows({ issues, loaded: true, error: null }))).toBe(2);
+    expect(countOf(buildRows({ issues, loaded: true, error: null }, new Set(["a"])))).toBe(2);
+  });
+
+  it("interleaves multiple categories correctly under partial folds", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+      mk({ id: ".scratch/c/issues/4.md", title: "4" }),
+      mk({ id: ".scratch/c/issues/5.md", title: "5" }),
+    ]);
+    const rows = buildRows({ issues, loaded: true, error: null }, new Set(["b"]));
+    expect(rows).toHaveLength(7);
+    expect(
+      rows.map((r) => (r.kind === "group" ? `group:${r.root}` : "issue")),
+    ).toEqual(["group:a", "issue", "issue", "group:b", "group:c", "issue", "issue"]);
+  });
+
+  it("leaves error and empty states untouched by the collapse set", () => {
+    expect(buildRows({ issues: [], loaded: true, error: "boom" }, new Set(["a"]))).toEqual([
+      { kind: "error", message: "boom" },
+    ]);
+    expect(buildRows({ issues: [], loaded: false, error: null }, new Set(["a"]))).toEqual([]);
+    expect(buildRows({ issues: [], loaded: true, error: null }, new Set(["a"]))).toEqual([{ kind: "empty" }]);
+  });
+
+  it("emits exactly the rows the cursor walks — a folded category is one row", () => {
+    const issues = sortIssues([
+      mk({ id: ".scratch/a/issues/1.md", title: "1" }),
+      mk({ id: ".scratch/a/issues/2.md", title: "2" }),
+      mk({ id: ".scratch/b/issues/3.md", title: "3" }),
+    ]);
+    expect(buildRows({ issues, loaded: true, error: null }, new Set(["a"]))).toHaveLength(3);
+    expect(buildRows({ issues, loaded: true, error: null }, new Set(["a", "b"]))).toHaveLength(2);
+  });
+});
+
+describe("logic: categorySummary — the selected category's detail facts", () => {
+  it("counts all issues, open issues, and attention issues under one root", () => {
+    const open = mk({ id: ".scratch/e/issues/01-a.md", status: "open", title: "01 — A" });
+    const human = mk({ id: ".scratch/e/issues/02-b.md", status: "open", labels: ["ready-for-human"] });
+    const done = mk({ id: ".scratch/e/issues/03-c.md", status: "resolved" });
+    const other = mk({ id: ".scratch/other/issues/01-d.md" });
+    const isAttention = (i: Issue) => i.labels.includes("ready-for-human");
+    expect(categorySummary([open, human, done, other], "e", isAttention)).toEqual({
+      root: "e",
+      count: 3,
+      open: 2,
+      yourTurn: 1,
+    });
+  });
+
+  it("is all-zeros for a root with no issues", () => {
+    expect(categorySummary([mk()], "missing", () => false)).toEqual({
+      root: "missing",
+      count: 0,
+      open: 0,
+      yourTurn: 0,
+    });
+  });
 });
 
 describe("logic: moveCursor wraps and clamps", () => {
@@ -196,6 +322,10 @@ describe("logic: rowTitleBudget — non-collapsing segments, floor at 0 (issue 1
     const base = { innerW: 60, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0 };
     expect(rowTitleBudget({ ...base, depth: 2 })).toBe(rowTitleBudget({ ...base, depth: 0 }) - 4);
   });
+  it("reserves the fold chevron so the title never collides with it", () => {
+    const base = { innerW: 60, branchLen: 3, idLen: 3, tasksLen: 0, ageLen: 0, depth: 0 };
+    expect(rowTitleBudget({ ...base, chevronLen: 2 })).toBe(rowTitleBudget(base) - 2);
+  });
 });
 
 
@@ -226,6 +356,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
         shell={noopShell}
         initialIssues={[first, second]}
         initialDetail={detail}
+        initialCursor={1}
       />
     ));
     // markdown body settles after its highlight round-trip — wait for it
@@ -265,7 +396,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[issue]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     // markdown body settles after its highlight round-trip — wait for it
@@ -290,6 +421,85 @@ describe("App (initial render smoke — two-pane shell)", () => {
     setup.renderer.destroy();
   });
 
+  // collapsible-categories 01 acceptance: the cursor rests on category headers
+  // like ordinary rows, and the default row 0 IS the first header — so a fresh
+  // render selects a whole category and the detail pane mirrors its summary
+  // (name, count, open, your-turn) instead of showing a blank. The other panes
+  // and the header counters keep painting as before.
+  it("paints the selected category's summary in the detail pane", async () => {
+    const first = mk({
+      id: ".scratch/herdr-frontier/issues/01-impl.md",
+      title: "01 — Impl",
+      status: "open",
+      labels: ["ready-for-agent"],
+    });
+    const second = mk({
+      id: ".scratch/herdr-frontier/issues/02-human.md",
+      title: "02 — Human",
+      status: "open",
+      labels: ["ready-for-human"],
+    });
+    const other = mk({
+      id: ".scratch/auth-spec/issues/03-token.md",
+      title: "03 — Token",
+    });
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[first, second, other]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the cursor's first stop is the first category header — its summary paints
+    // in the detail pane (name + full count + open/your-turn, mirroring the
+    // header counts)
+    expect(frame).toContain("herdr-frontier");
+    expect(frame).toContain("2 issues · 2 open · 1 your-turn");
+    // adjacent categories and their issues still paint as ordinary rows
+    expect(frame).toContain("auth-spec");
+    expect(frame).toContain("03 — Token");
+    setup.renderer.destroy();
+  });
+
+  // collapsible-categories 02 acceptance (Seam 4): the initial-collapsed seam
+  // paints the folded state directly — a folded category shows its header with
+  // the folded chevron (`▸`) and its full count, and none of its issue rows;
+  // an expanded category shows the live `▾` chevron with its issues. Keyboard/
+  // mouse interaction lives in the pure seams (buildRows + appKeyAction), not
+  // here — the one-shot renderer can't press keys.
+  it("paints a folded header (▸, full count, no issue rows) and an expanded header's ▾ with its issues", async () => {
+    const first = mk({
+      id: ".scratch/herdr-frontier/issues/01-impl.md",
+      title: "01 — Impl",
+      status: "open",
+      labels: ["ready-for-agent"],
+    });
+    const second = mk({
+      id: ".scratch/herdr-frontier/issues/02-human.md",
+      title: "02 — Human",
+      status: "open",
+      labels: ["ready-for-human"],
+    });
+    const other = mk({
+      id: ".scratch/auth-spec/issues/03-token.md",
+      title: "03 — Token",
+    });
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[first, second, other]} initialCollapsed={["herdr-frontier"]} />,
+      { width: 100, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the folded header paints ▸ with its full count — and none of its issues
+    expect(frame).toContain("▸ herdr-frontier");
+    expect(frame).toContain("2 issues · 2 open · 1 your-turn");
+    expect(frame).not.toContain("01 — Impl");
+    expect(frame).not.toContain("02 — Human");
+    // the expanded category paints ▾ with its issues
+    expect(frame).toContain("▾ auth-spec");
+    expect(frame).toContain("03 — Token");
+    setup.renderer.destroy();
+  });
+
   // Regression: the stale-detail race. When a detail record for a differently
   // id'd issue is present while another issue is selected (the state between
   // navigation and the new read resolving), the body must not paint under the
@@ -303,7 +513,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
       comments: [],
     };
     const setup = await testRender(() => (
-      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} />
+      <App shell={noopShell} initialIssues={[eleven, twelve]} initialDetail={staleDetail} initialCursor={1} />
     ));
     await setup.flush();
     const frame = setup.captureCharFrame();
@@ -321,7 +531,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const tall = mk({ id: ".scratch/herdr-frontier/issues/01-x.md", title: "01 — X" });
     const detail: IssueDetail = { ...tall, body: "BODY\n" + "line\n".repeat(60), comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[tall]} initialDetail={detail} initialCursor={1} />,
       { width: 100, height: 12 },
     );
     await setup.flush();
@@ -341,7 +551,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     });
     const detail: IssueDetail = { ...impl, body: "Build the driver.", comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[impl]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -357,7 +567,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
     const human = mk({ id: ".scratch/herdr-frontier/issues/13-human.md", labels: ["ready-for-human"] });
     const detail: IssueDetail = { ...human, body: "Your turn.", comments: [] };
     const setup = await testRender(
-      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} />,
+      () => <App shell={noopShell} initialIssues={[human]} initialDetail={detail} initialCursor={1} />,
       { width: 120, height: 20 },
     );
     await setup.flush();
@@ -412,6 +622,7 @@ describe("App (initial render smoke — two-pane shell)", () => {
           shell={runShell}
           initialIssues={[issue]}
           initialDetail={detail}
+          initialCursor={1}
         />
       ),
       { width: 120, height: 20 },
@@ -481,6 +692,52 @@ describe("App (initial render smoke — two-pane shell)", () => {
     expect(frame).toContain("/wayfinder .scratch/herdr-frontier/issues/01-a.md");
     // the primary list pane is not in this view
     expect(frame).not.toContain(" Issues ");
+    setup.renderer.destroy();
+  });
+
+  // collapsible-categories 03 acceptance (Seam 4): the initial-tree-collapsed
+  // seam paints the node-level fold directly — a folded node keeps its row with
+  // the `▸` chevron and none of its descendants; an expanded parent shows the
+  // live `▾` chevron; a leaf shows no chevron at all. Keyboard interaction
+  // (Space ↔ Enter) lives in the pure seams (foldForest + appKeyAction), not
+  // here — the one-shot renderer can't press keys.
+  it("paints chevron-tagged tree rows — ▾ expanded parents, ▸ folded nodes, pruned subtrees", async () => {
+    const root = mk({
+      id: ".scratch/herdr-frontier/issues/01-a.md",
+      title: "01 — Alpha",
+    });
+    const child = mk({
+      id: ".scratch/herdr-frontier/issues/02-b.md",
+      title: "02 — Beta",
+      blockedBy: ["01"],
+    });
+    const grand = mk({
+      id: ".scratch/herdr-frontier/issues/03-c.md",
+      title: "03 — Gamma",
+      blockedBy: ["02"],
+    });
+    const detail: IssueDetail = { ...root, body: "", comments: [] };
+    const setup = await testRender(
+      () => (
+        <App
+          shell={noopShell}
+          initialIssues={[root, child, grand]}
+          initialDetail={detail}
+          initialView="tree"
+          initialTreeCollapsed={[child.id]}
+        />
+      ),
+      { width: 80, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    // the expanded parent paints ▾, the folded node paints ▸
+    expect(frame).toContain("▾");
+    expect(frame).toContain("▸");
+    // the folded node keeps its row; its descendant is pruned from the tree
+    expect(frame).toContain("Alpha");
+    expect(frame).toContain("Beta");
+    expect(frame).not.toContain("Gamma");
     setup.renderer.destroy();
   });
 

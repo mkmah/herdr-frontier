@@ -3,11 +3,12 @@
 // derivations (domain/rows, domain/format) fed in from App. Presentational —
 // the pane owns no state of its own.
 
-import { type Component, For } from "solid-js";
+import { type Component, For, Show } from "solid-js";
 import { TextAttributes, type MouseEvent } from "@opentui/core";
 import type { Issue } from "#/services/tracker/provider.js";
 import type { AgentStatus } from "#/services/herdr/types.js";
 import type { Row } from "#/lib/rows.js";
+import { groupId } from "#/lib/rows.js";
 import { THEME } from "#/lib/theme.js";
 import { IssueRow } from "#/components/IssueRow.js";
 
@@ -16,6 +17,9 @@ export interface ListPaneProps {
   rows: Row[];
   /** The id of the currently selected issue, if any (row-level selection). */
   selectedId: string | null;
+  /** The root of the selected category header, if any — the header rows paint
+   *  the same selected background an issue row does (collapsible-categories 01). */
+  selectedRoot: string | null;
   /** The row budget inner width (dims minus the scrollbox inset). */
   innerW: number;
   focused: boolean;
@@ -25,6 +29,9 @@ export interface ListPaneProps {
   /** Blocker membership per issue (the loaded set, effort-scoped). */
   isResolved: (issue: Issue) => (id: string) => boolean;
   onRowMouseDown: (e: MouseEvent, id: string) => void;
+  /** A category header clicked — selects the whole category and folds it
+   *  (single click = one fold; a double-click is two folds, never a dispatch). */
+  onHeaderMouseDown: (e: MouseEvent, root: string) => void;
   onWheel: (e: MouseEvent) => void;
   /** The scrollbox element ref — App auto-scrolls the cursor row into view. */
   scrollRef: (el: any) => void;
@@ -50,11 +57,35 @@ export const ListPane: Component<ListPaneProps> = (p) => (
             case "empty":
               return <text fg={THEME.text.dim} paddingLeft={1}> no issues found under .scratch/*/issues/</text>;
             case "group":
+              // The header is a selectable, collapsible row like any other —
+              // selected it paints the issue-selection background, a click
+              // selects + folds it. Keyed remount so the backgroundColor *and*
+              // the fold state's chevron flip repaint (OpenTUI 0.5.1 repaint
+              // quirk, same as IssueRow), and a stable `group:<root>` id so the
+              // scrollbox's scrollChildIntoView can find it. The gap above the
+              // header is a *margin*, not padding: padding would paint the
+              // selection background into the whitespace above the row. The
+              // chevron is live — `▾` expanded, `▸` folded (the builder marks
+              // the row's fold state).
               return (
-                <box flexDirection="row" paddingLeft={1} paddingTop={1}>
-                  <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD}>{`▸ ${row.root}`}</text>
-                  <text fg={THEME.text.dim}>{`  ${row.count}`}</text>
-                </box>
+                <Show
+                  when={`${p.selectedRoot === row.root ? "s" : "u"}|${row.folded ? "f" : "o"}`}
+                  keyed
+                >
+                  {(_k: string) => (
+                    <box
+                      id={groupId(row.root)}
+                      flexDirection="row"
+                      paddingLeft={1}
+                      marginTop={1}
+                      backgroundColor={p.selectedRoot === row.root ? THEME.selBg : undefined}
+                      onMouseDown={(e: MouseEvent) => p.onHeaderMouseDown(e, row.root)}
+                    >
+                      <text fg={THEME.accent.triage} attributes={TextAttributes.BOLD}>{`${row.folded ? "▸" : "▾"} ${row.root}`}</text>
+                      <text fg={THEME.text.dim}>{`  ${row.count}`}</text>
+                    </box>
+                  )}
+                </Show>
               );
             case "issue":
               return (

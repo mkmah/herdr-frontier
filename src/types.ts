@@ -7,6 +7,7 @@ import type { Issue, IssueDetail } from "#/services/tracker/provider.js";
 import type { AgentStatus } from "#/services/herdr/types.js";
 import type { RunState } from "#/services/run/advance.js";
 import type { ConfirmButton, ConfirmDialog } from "#/lib/confirm.js";
+import type { CategorySummary } from "#/lib/rows.js";
 
 /** The two top-level views: the primary list and the secondary dependency tree. */
 export type AppView = "list" | "tree";
@@ -38,6 +39,9 @@ export type ModalState = { dialog: ConfirmDialog; focus: ConfirmButton };
 export interface DetailContentProps {
   /** The selected issue; null when nothing is selected. */
   issue: Issue | null;
+  /** The whole-category selection's summary — when set, the pane paints the
+   *  category (name, count, open, your-turn) in place of any issue content. */
+  category: CategorySummary | null;
   /** The fetched verbose record, when it matches the selection. */
   detail: IssueDetail | null;
   /** A body read is in flight (the " loading body…" placeholder). */

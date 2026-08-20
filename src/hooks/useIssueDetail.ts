@@ -10,6 +10,7 @@ import { useTerminalDimensions } from "@opentui/solid";
 import type { ShellController } from "#/services/shell/shell.js";
 import type { Issue, IssueDetail } from "#/services/tracker/provider.js";
 import type { AgentStatus } from "#/services/herdr/types.js";
+import type { CategorySummary } from "#/lib/rows.js";
 import type { AppView, DetailContentProps, DispatchUi, ReleaseUi } from "#/types.js";
 
 // The scrollbox that carries a pane's rows renders its content 2 columns
@@ -24,6 +25,9 @@ const ROW_SCROLLBOX_INSET = 6;
 export function useIssueDetail(args: {
   shell: ShellController;
   selected: () => Issue | undefined;
+  /** The whole-category selection under the list cursor, if any — its summary
+   *  paints in place of any issue body (collapsible-categories 01). */
+  selectedCategory: () => CategorySummary | null;
   /** Pre-loaded detail for the first selection (test seam); production omits it. */
   initialDetail?: IssueDetail;
   dispatchState: () => DispatchUi;
@@ -85,14 +89,34 @@ export function useIssueDetail(args: {
   const detailInnerWFor = () => (args.view() === "tree" ? treeDetailInnerW() : detailInnerW());
 
   // The displayed state the detail pane paints — the whole read-only "zoom" view
-  // of the selected Issue, fed to DetailContent as narrow props. The run-status
-  // line remounts on its own key (via runVersion) so a ~2s poll bump doesn't
-  // recreate the markdown body; the rest of the content remounts on detailKey.
+  // of the selected Issue, fed to DetailContent as narrow props. A whole-category
+  // selection swaps the issue record for its summary (no fetched body read); the
+  // run-status line remounts on its own key (via runVersion) so a ~2s poll bump
+  // doesn't recreate the markdown body; the rest of the content remounts on
+  // detailKey.
   const detailContent = (): DetailContentProps | null => {
+    const cat = args.selectedCategory();
+    if (cat) {
+      return {
+        issue: null,
+        category: cat,
+        detail: null,
+        loading: false,
+        dispatch: args.dispatchState(),
+        release: args.releaseState(),
+        runVersion: args.runVersion(),
+        pulse: args.pulse(),
+        agentStatus: undefined,
+        isResolved: args.resolvedFor,
+        runFor: (root: string) => args.shell.runFor(root),
+        innerW: detailInnerWFor(),
+      };
+    }
     const sel = args.selected();
     if (!sel) return null;
     return {
       issue: sel,
+      category: null,
       detail: detail(),
       loading: detailLoading(),
       dispatch: args.dispatchState(),
@@ -120,6 +144,12 @@ export function useIssueDetail(args: {
   // zero-arg arrow makes Solid return the same fn reference on every key change,
   // so the pane silently never remounts.
   const detailKey = createMemo(() => {
+    // A whole-category selection remounts on its summary — the pane paints the
+    // category facts in place of any body (collapsible-categories 01).
+    const cat = args.selectedCategory();
+    if (cat) {
+      return `cat:${cat.root}|${cat.count}|${cat.open}|${cat.yourTurn}|${detailInnerWFor()}`;
+    }
     const s = args.selected();
     if (!s) return null;
     const d = detail();
