@@ -1,5 +1,13 @@
 # herdr-frontier
 
+## 0.4.0
+
+### Minor Changes
+
+- [#11](https://github.com/mkmah/herdr-frontier/pull/11) [`b7e7941`](https://github.com/mkmah/herdr-frontier/commit/b7e79413ec8910569a173b74cfe80762ac9f33be) - Categories and dependency-tree nodes now fold/unfold. In the list view, `Enter`/`Space` on a selected category — or a click on its header — folds it: issue rows hide, the header keeps its full count, the chevron flips `▾`/`▸`, and the cursor clamps onto the header so it never rests on a hidden issue. In the dependency tree, `Space` on a node folds its whole subtree (a leaf's `Space` is a no-op; `Enter` still dispatches), with the same live chevron before the connector. Fold state is session-only in both views — keyed per effort name in the list, per issue id in the tree — so reloads and the ~2s poll keep your arrangement and only a restart resets it.
+
+- [#11](https://github.com/mkmah/herdr-frontier/pull/11) [`b7e7941`](https://github.com/mkmah/herdr-frontier/commit/b7e79413ec8910569a173b74cfe80762ac9f33be) - The list cursor now walks category header rows like ordinary rows — a whole category can be selected as a unit, its summary (name, count, open, your-turn) paints in the detail pane, the four Confirmable verbs no-op on it, and `t` scopes the dependency tree to that category's whole graph.
+
 ## 0.3.1
 
 ### Patch Changes
