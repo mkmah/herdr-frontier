@@ -87,7 +87,9 @@ export interface RawProfile {
 }
 
 /** Read + parse one layer's TOML; a missing file is null, a malformed one is
- *  a loud parse error (a broken config must not silently fall back). */
+ *  a loud parse error (a broken config must not silently fall back). The error
+ *  is wrapped with our own stable message naming the file — the underlying
+ *  parser's wording is version-dependent and must not leak. */
 function readConfigFile(abs: string): RawConfig | null {
   let raw: string;
   try {
@@ -95,7 +97,11 @@ function readConfigFile(abs: string): RawConfig | null {
   } catch {
     return null; // absent layer — nothing to contribute
   }
-  return Bun.TOML.parse(raw) as RawConfig;
+  try {
+    return Bun.TOML.parse(raw) as RawConfig;
+  } catch (e) {
+    throw new Error(`failed to parse toml ${abs}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** A usable profile: a non-empty string `kind` (args optional, coerced to a

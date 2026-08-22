@@ -112,7 +112,15 @@ describe("loadPluginConfig — two TOML layers, repo > user (issue 17)", () => {
 
   it("loudly throws on a malformed TOML file (a user typo must not silently vanish)", async () => {
     await writeUser("[profiles.grilling\nkind = 'broken'");
+    // The loader wraps the parser error with its own stable message — never
+    // Bun's version-dependent wording — naming the offending file.
     expect(() => loadPluginConfig({ repoRoot, userConfigDir: userDir })).toThrow(/parse toml/i);
+    try {
+      loadPluginConfig({ repoRoot, userConfigDir: userDir });
+      expect.unreachable();
+    } catch (e) {
+      expect((e as Error).message).toContain(join(userDir, CONFIG_FILE));
+    }
   });
 });
 
