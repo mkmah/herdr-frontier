@@ -1,6 +1,6 @@
 id = "herdr-frontier"
 name = "herdr-frontier"
-version = "0.4.0"
+version = "0.4.1"
 min_herdr_version = "0.8.0"
 description = "OpenTUI/Solid render layer that orchestrates the Matt Pocock skill workflow across a dependency graph of issues, on a multi-tracker substrate."
 platforms = ["macos", "linux"]
