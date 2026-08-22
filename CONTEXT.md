@@ -28,6 +28,14 @@ _Avoid_: Connector, Driver.
 The set of issues that are claimable right now: `open ∧ unclaimed ∧ all-blockers-resolved`. Not a tracker concept — computed by the orchestrator by filtering `listIssues`.
 _Avoid_: Queue, Backlog, Ready list.
 
+**Status**:
+An issue's lifecycle word — `open`, `claimed`, or `resolved` — the axis the claim mutex and frontier filter on. Never carries readiness or triage meaning.
+_Avoid_: Triage state (that's the label), Readiness.
+
+**Triage label**:
+One of the 5 roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`, plus the `wayfinder:*` namespace) recorded on the `Labels:` line — the axis dispatch precedence decides on. A role value found on a `Status:` line is a parse-time coercion onto labels, recorded as a warning.
+_Avoid_: Status (a status is a lifecycle, not a role), Category.
+
 **Claim**:
 The mutex intent that marks an issue as taken so concurrent dispatchers (manual or automated) don't double-launch it. First-class provider verb; the cross-session coordination around it is orchestrator-level.
 _Avoid_: Assign (assignee is how a tracker records a claim, not the intent itself), Lock.

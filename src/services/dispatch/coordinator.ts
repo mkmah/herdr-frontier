@@ -71,6 +71,7 @@ export interface DispatchDeps {
 export type DispatchFailureReason =
   | "already-dispatched"
   | "already-claimed"
+  | "already-resolved"
   | "claim-busy"
   | "not-dispatchable";
 
@@ -123,6 +124,11 @@ export class DispatchCoordinator {
       return { ok: false, issue, command: null, reason: "not-dispatchable" };
     }
     const command = outcome.command;
+    // A resolved issue is done (its failure reason is its own, distinct from an
+    // in-flight claim); any other non-open status is a live claim.
+    if (issue.status === "resolved") {
+      return { ok: false, issue, command, reason: "already-resolved" };
+    }
     if (issue.status !== "open") {
       return { ok: false, issue, command, reason: "already-claimed" };
     }

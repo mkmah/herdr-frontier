@@ -67,11 +67,13 @@ export function useVerbs(args: {
         const msg =
           r.reason === "already-dispatched"
             ? "already dispatched this session"
-            : r.reason === "already-claimed"
-              ? "already claimed by another dispatcher"
-              : r.reason === "claim-busy"
-                ? "claim lock busy — try again"
-                : "human turn — not auto-dispatched";
+            : r.reason === "already-resolved"
+              ? "already resolved — nothing to dispatch"
+              : r.reason === "already-claimed"
+                ? `claimed by ${r.issue.assignee ?? "another dispatcher"}`
+                : r.reason === "claim-busy"
+                  ? "claim lock busy — try again"
+                  : "human turn — not auto-dispatched";
         setDispatchState({ status: "error", issueId: r.issue.id, message: msg });
       }
     } catch (e) {

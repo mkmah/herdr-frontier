@@ -26,6 +26,9 @@ import type { ProfilesConfig } from "#/lib/profiles.js";
 import { idEffort, idNum, idOrder } from "#/services/tracker/local-markdown.js";
 
 const ID = ".scratch/herdr-frontier/issues/12-driver.md";
+/** The full dispatched prompt for the implement path — the command the TDD
+ * mandate rides on (orchestrator's dispatch()). */
+const CMD = `/implement ${ID}\nEvery task must be implemented test-first using the /tdd skill.`;
 const BODY = "## What to build\n\nA herdr driver with an injectable runner.";
 
 const mk = (over: Partial<Issue> = {}): IssueDetail => {
@@ -133,7 +136,7 @@ function harness(
     [`tab create --cwd ${CWD} --label 12 — Driver --no-focus`]: TAB_OK,
     [WAIT_SHELL]: ok({ matched_line: "❯" }),
     "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5": ok({}),
-    [`agent prompt herdr-frontier-12 /implement ${ID}`]: ok({}),
+    [`agent prompt herdr-frontier-12 ${CMD}`]: ok({}),
     ...over.fixtures,
   });
   const client = new HerdrClient({ runner });
@@ -167,7 +170,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     if (!result.ok) return;
     // For local-markdown `{id}` is the repo-relative .md path — the same id the
     // agent (via /implement) resolves. The body is never embedded.
-    expect(result.command).toBe(`/implement ${ID}`);
+    expect(result.command).toBe(CMD);
     expect(result.kind).toBe("opencode");
     expect(result.args).toEqual(["-m", "claude-sonnet-4-5"]);
     expect(result.paneId).toBe("wZ:p3");
@@ -185,7 +188,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
       WAIT_SHELL,
       "api schema --json",
       "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5",
-      `agent prompt herdr-frontier-12 /implement ${ID}`,
+      `agent prompt herdr-frontier-12 ${CMD}`,
     ]);
   });
 
@@ -221,7 +224,7 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     const second = await h.coordinator.dispatchIssue(mk());
 
     expect(first.ok).toBe(true);
-    expect(second).toEqual({ ok: false, issue: mk(), command: `/implement ${ID}`, reason: "already-dispatched" });
+    expect(second).toEqual({ ok: false, issue: mk(), command: CMD, reason: "already-dispatched" });
     // Only one agent-start invocation ever happened — no double-dispatch.
     expect(h.calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(1);
   });
@@ -246,11 +249,19 @@ describe("DispatchCoordinator.dispatchIssue", () => {
     expect(h.claims.tryClaim(ID)).toBe(true); // mutex freed → retryable
   });
 
-  it("reports already-claimed when the issue isn't open (in-flight or done — status gate)", async () => {
+  it("reports already-claimed for an in-flight issue (status gate)", async () => {
     const h = harness([mk({ status: "claimed" })]);
     const result = await h.coordinator.dispatchIssue(mk({ status: "claimed" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("already-claimed");
+    expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
+  });
+
+  it("reports already-resolved (distinct from already-claimed) for a resolved issue", async () => {
+    const h = harness([mk({ status: "resolved" })]);
+    const result = await h.coordinator.dispatchIssue(mk({ status: "resolved" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("already-resolved");
     expect(h.calls.some((c) => c[0] === "agent" && c[1] === "start")).toBe(false);
   });
 
@@ -463,7 +474,7 @@ describe("DispatchCoordinator.reconcileTick — the attention watcher (issue 13)
       if (key === "agent start herdr-frontier-12 --kind opencode --pane wZ:p3 --timeout 120000 -- -m claude-sonnet-4-5") {
         return { code: 0, stdout: ok({}), stderr: "" };
       }
-      if (key === `agent prompt herdr-frontier-12 /implement ${ID}`) return { code: 0, stdout: ok({}), stderr: "" };
+      if (key === `agent prompt herdr-frontier-12 ${CMD}`) return { code: 0, stdout: ok({}), stderr: "" };
       if (key.startsWith("notification show")) return { code: 0, stdout: ok({}), stderr: "" };
       return { code: 1, stdout: "", stderr: `no fixture for: ${key}` };
     };
