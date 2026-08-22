@@ -14,6 +14,11 @@ import { blockerResolved } from "#/lib/issues.js";
 const WAYFINDER_MAP = "wayfinder:map";
 const READY_FOR_AGENT = "ready-for-agent";
 
+/** The mandate every implement dispatch carries — all implement tasks are
+ * test-first. It rides on the prompt (not a skill file), so it survives skill
+ * updates and reaches whichever agent the profile launches. */
+const IMPLEMENT_TDD_NOTE = "Every task must be implemented test-first using the /tdd skill.";
+
 /** What one Issue resolves to at dispatch time (CONTEXT.md's Dispatch). */
 export type DispatchOutcome =
   | { kind: "wayfinder"; id: string; command: string }
@@ -41,7 +46,7 @@ export function dispatch(issue: Issue): DispatchOutcome {
   if (wf) return { kind: "wayfinder", id: issue.id, command: `/wayfinder ${issue.id}` };
 
   if (labels.includes(READY_FOR_AGENT)) {
-    return { kind: "implement", id: issue.id, command: `/implement ${issue.id}` };
+    return { kind: "implement", id: issue.id, command: `/implement ${issue.id}\n${IMPLEMENT_TDD_NOTE}` };
   }
 
   if (labels.includes(WAYFINDER_MAP)) return { kind: "not-dispatched", reason: "run-root" };

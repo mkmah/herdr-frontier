@@ -576,6 +576,27 @@ describe("App (initial render smoke — two-pane shell)", () => {
     setup.renderer.destroy();
   });
 
+  // Tolerant parsing: a non-canonical file (e.g. to-tickets' bold template)
+  // still dispatches, and the coercion that made it parseable is visible —
+  // never silently applied.
+  it("surfaces parse warnings as a dim line in the detail pane", async () => {
+    const odd = mk({
+      id: ".scratch/cats/issues/01-select.md",
+      title: "01 — Selectable categories",
+      warnings: ['Status value "ready" not recognized — treated as open'],
+    });
+    const detail: IssueDetail = { ...odd, body: "Body.", comments: [] };
+    const setup = await testRender(
+      () => <App shell={noopShell} initialIssues={[odd]} initialDetail={detail} initialCursor={1} />,
+      { width: 120, height: 20 },
+    );
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("⚠");
+    expect(frame).toContain('Status value "ready"');
+    setup.renderer.destroy();
+  });
+
   // Issue 12: `x` stops + reopens an in-flight issue. The OpenTUI test renderer
   // is one-shot (no reactivity), so the keypress itself is covered by the
   // dispatch/coordinator unit tests; here we assert the binding is surfaced in

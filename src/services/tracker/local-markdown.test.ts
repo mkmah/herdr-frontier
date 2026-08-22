@@ -599,3 +599,127 @@ describe("LocalMarkdownProvider.release (issue 12 — reopen an in-flight issue)
     expect(["Status: open", "Status: claimed"].some((s) => onDisk.includes(s))).toBe(true);
   });
 });
+
+describe("tolerant parsing — to-tickets bold-template files", () => {
+  // The /to-tickets skill's local-file template writes emphasized field lines
+  // ("**Status:** ready-for-agent") that can also sit BELOW the body's first
+  // line, and records the triage role on the Status line. The adapter tolerates
+  // that shape instead of silently mis-reading it (labels ⇒ needs-triage ⇒
+  // "human turn — not auto-dispatched").
+  const TEMPLATE = [
+    "# 01 — Selectable categories in the list",
+    "",
+    "**What to build:** The list cursor walks category header rows.",
+    "",
+    "**Blocked by:** None — can start immediately.",
+    "",
+    "**Status:** ready-for-agent",
+    "",
+    "- [ ] Acceptance criterion 1",
+    "- [ ] Acceptance criterion 2",
+  ].join("\n");
+
+  it("reads the triage role off a bold Status line as a label (status stays open)", async () => {
+    await writeIssue("cats", "01-select.md", TEMPLATE);
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.status).toBe("open");
+    expect(issue.labels).toEqual(["ready-for-agent"]);
+  });
+
+  it("records a parse warning for the role-on-Status coercion", async () => {
+    await writeIssue("cats", "01-select.md", TEMPLATE);
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.warnings?.length).toBeGreaterThanOrEqual(1);
+    expect(issue.warnings!.join(" ")).toContain("ready-for-agent");
+  });
+
+  it("reads a bold lifecycle status value directly (bold alone is not a warning)", async () => {
+    await writeIssue(
+      "cats",
+      "02-fold.md",
+      TEMPLATE.replace("**Status:** ready-for-agent", "**Status:** resolved"),
+    );
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.status).toBe("resolved");
+    expect(issue.labels).toEqual(["needs-triage"]);
+    expect(issue.warnings).toBeUndefined();
+  });
+
+  it("reads bold Labels and Blocked-by lines with titled refs", async () => {
+    await writeIssue(
+      "cats",
+      "03-tree.md",
+      [
+        "# 03 — Fold nodes in the tree",
+        "",
+        "**What to build:** Fold nodes.",
+        "",
+        "**Blocked by:** 02 — Fold/unfold categories in the list (owns the shared key action)",
+        "",
+        "**Labels:** ready-for-agent",
+        "**Status:** open",
+      ].join("\n"),
+    );
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.labels).toEqual(["ready-for-agent"]);
+    expect(issue.blockedBy).toEqual(["02"]);
+  });
+
+  it("treats 'None — can start immediately' as no blockers (frontier-reachable)", async () => {
+    await writeIssue("cats", "01-select.md", TEMPLATE);
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.blockedBy).toEqual([]);
+  });
+
+  it("ignores field-looking lines inside fenced code blocks", async () => {
+    await writeIssue(
+      "cats",
+      "04-docs.md",
+      [
+        "# 04 — Docs",
+        "",
+        "Status: open",
+        "Labels: ready-for-agent",
+        "",
+        "```",
+        "Status: resolved",
+        "Labels: ready-for-human",
+        "```",
+      ].join("\n"),
+    );
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.status).toBe("open");
+    expect(issue.labels).toEqual(["ready-for-agent"]);
+  });
+
+  it("warns on an unrecognized Status value and defaults to open", async () => {
+    await writeIssue("cats", "05-odd.md", "# 05 — Odd\n\nStatus: ready\nLabels: ready-for-agent\nBlocked by: —\n");
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.status).toBe("open");
+    expect(issue.labels).toEqual(["ready-for-agent"]);
+    expect(issue.warnings!.join(" ")).toContain("ready");
+  });
+
+  it("claims a template file: canonicalizes Status and preserves the role on a Labels line", async () => {
+    await writeIssue("cats", "01-select.md", TEMPLATE);
+    const id = ".scratch/cats/issues/01-select.md";
+    const p = new LocalMarkdownProvider({ repoRoot: root });
+    const claimed = await p.claim(id);
+    expect(claimed.status).toBe("claimed");
+    expect(claimed.labels).toEqual(["ready-for-agent"]);
+    const onDisk = await readFile(issuePath("cats", "01-select.md"), "utf8");
+    expect(onDisk).toContain("Status: claimed");
+    expect(onDisk).toContain("Labels: ready-for-agent");
+    expect(onDisk).toContain("**What to build:**"); // the body is preserved
+  });
+
+  it("keeps canonical files warning-free (the strict format still parses clean)", async () => {
+    await writeIssue(
+      "cats",
+      "06-canonical.md",
+      "# 06 — Canonical\n\nStatus: open\nType: task\nLabels: ready-for-agent\nBlocked by: —\n\nBody.\n",
+    );
+    const issue = (await new LocalMarkdownProvider({ repoRoot: root }).listIssues())[0]!;
+    expect(issue.warnings).toBeUndefined();
+  });
+});

@@ -22,6 +22,15 @@
 // `Labels:` line reads as `needs-triage`. The legacy backtick
 // `wayfinder:<type>` line is read only to infer `Type` (the field Option C
 // keeps separate from labels), never as a label.
+//
+// TOLERATED (recorded in `warnings`, never silent): writers we don't control
+// (to-tickets' local-file template) emit emphasized field lines
+// (`**Status:**`, `**Labels:**`, `**Blocked by:**`) that can sit below the
+// body's first line. Field names match with `*`/`**`/`_`/`__` emphasis, are
+// recognized file-wide (outside fenced code blocks), a triage-role value on a
+// `Status:` line migrates onto the labels, and a `Blocked by:` value of
+// "None …" or a titled ref ("03 — Title") reads as no-blockers / the numeric
+// prefix.
 
 import { open, readdir, readFile, rm, stat, writeFile, rename } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -139,7 +148,7 @@ export class LocalMarkdownProvider implements TrackerProvider {
       }
       const fm = parseFrontmatter(content, id);
       if (fm.status !== "open") throw new AlreadyClaimed(id, fm.status);
-      const updated = setStatusLine(content, fm.bodyStart, "claimed");
+      const updated = setStatusLine(content, "claimed");
       await atomicWrite(abs, updated);
       return parseIssue(updated, id);
     });
@@ -164,7 +173,7 @@ export class LocalMarkdownProvider implements TrackerProvider {
       }
       const fm = parseFrontmatter(content, id);
       if (fm.status === "open") return parseIssue(content, id); // no-op, mtime preserved
-      const updated = setStatusLine(content, fm.bodyStart, "open");
+      const updated = setStatusLine(content, "open");
       await atomicWrite(abs, updated);
       return parseIssue(updated, id);
     });
@@ -190,7 +199,7 @@ export class LocalMarkdownProvider implements TrackerProvider {
         throw new IssueNotFound(id);
       }
       const fm = parseFrontmatter(content, id);
-      const resolved = upsertAnswer(setStatusLine(content, fm.bodyStart, "resolved"), resolution);
+      const resolved = upsertAnswer(setStatusLine(content, "resolved"), resolution);
       await atomicWrite(abs, resolved);
       return parseIssue(resolved, id);
     });
@@ -267,21 +276,41 @@ function unsupported(verb: string): never {
 // --- atomic claim helpers ---------------------------------------------------
 
 /**
- * Rewrite the frontmatter `Status:` line (only the lines before the body) to a
- * new status. A file with no `Status:` line gains one right after the title.
+ * Rewrite the `Status:` line to a new status — file-wide (a template file may
+ * keep it below the body's first line; the parser's last-line-wins read means
+ * the LAST status line is the one rewritten) and emphasis-tolerant. A file with
+ * no `Status:` line gains one right after the title. A triage role found on the
+ * rewritten line is migrated onto the `Labels:` line so a later release
+ * (status → open) leaves the issue still correctly labeled.
  */
-function setStatusLine(content: string, bodyStart: number, status: IssueStatus): string {
+function setStatusLine(content: string, status: IssueStatus): string {
   const lines = content.split("\n");
-  const front = lines.slice(0, bodyStart);
-  const rest = lines.slice(bodyStart);
-  const idx = front.findIndex((l) => /^Status:/i.test(l));
-  if (idx >= 0) {
-    front[idx] = front[idx]!.replace(/^Status:.*$/i, `Status: ${status}`);
-  } else {
-    const head = front.findIndex((l) => /^#\s/.test(l));
-    front.splice(head >= 0 ? head + 1 : 0, 0, `Status: ${status}`);
+  const isStatusLine = (l: string) => /^\s*[*_]{0,2}\s*Status\s*:/i.test(l);
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (isStatusLine(lines[i]!)) idx = i;
   }
-  return [...front, ...rest].join("\n");
+  if (idx >= 0) {
+    const old = unemphasize(lines[idx]!).match(RE_STATUS)?.[1]?.trim() ?? "";
+    lines[idx] = `Status: ${status}`;
+    if (TRIAGE_ROLES.has(old)) {
+      let labelIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (/^\s*[*_]{0,2}\s*Labels\s*:/i.test(lines[i]!)) labelIdx = i;
+      }
+      if (labelIdx >= 0) {
+        const existing = unemphasize(lines[labelIdx]!).match(RE_LABELS)?.[1] ?? "";
+        const merged = addLabel(mergeLabels([], existing), old);
+        lines[labelIdx] = `Labels: ${merged.join(", ")}`;
+      } else {
+        lines.splice(idx + 1, 0, `Labels: ${old}`);
+      }
+    }
+  } else {
+    const head = lines.findIndex((l) => /^#\s/.test(l));
+    lines.splice(head >= 0 ? head + 1 : 0, 0, `Status: ${status}`);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -434,6 +463,33 @@ const RE_BLOCKED = /^Blocked by:\s*(.*)$/;
 const RE_ASSIGNEE = /^Assignee:\s*(.*)$/;
 const RE_WAYFINDER_LINE = /^`(wayfinder:[a-z-]+)`$/;
 
+/** The 5 triage roles (triage-labels.md) — legal LABEL vocabulary that some
+ *  writers (to-tickets' local template) put on a `Status:` line. The parser
+ *  migrates such a value onto the labels (with a recorded warning) instead of
+ *  silently discarding it, so those files still dispatch. */
+const TRIAGE_ROLES: ReadonlySet<string> = new Set([
+  "needs-triage",
+  "needs-info",
+  "ready-for-agent",
+  "ready-for-human",
+  "wontfix",
+]);
+
+/** A fenced-code-block boundary — field-looking lines inside a fence are
+ * content (an example file), never metadata. */
+function isFence(line: string): boolean {
+  return /^\s*(```|~~~)/.test(line);
+}
+
+/** Strip markdown emphasis around a field name ("**Status:** v" → "Status: v")
+ *  so emphasized template lines parse without loosening the canonical form. */
+function unemphasize(line: string): string {
+  return line
+    .replace(/^\s*([*_]{1,2})\s*/, "") // "**Status:**" → "Status:**"
+    .replace(/\s*([*_]{1,2})\s*(?=:)/, "") // "**Status**:" → "Status:"
+    .replace(/:\s*([*_]{1,2})/, ":"); // "Status:**" (emphasis after colon) → "Status:"
+}
+
 interface Frontmatter {
   title: string;
   status: IssueStatus;
@@ -441,6 +497,8 @@ interface Frontmatter {
   labels: string[];
   assignee: string | null;
   blockedBy: string[];
+  /** Coercions the parser applied to non-canonical field lines — never silent. */
+  warnings: string[];
   bodyStart: number; // line index where the body begins
 }
 
@@ -481,6 +539,7 @@ export function parseIssue(content: string, id: string, display?: DisplayMeta): 
     labels: fm.labels,
     assignee: fm.assignee,
     blockedBy: fm.blockedBy,
+    ...(fm.warnings.length ? { warnings: fm.warnings } : {}),
     ...display,
   };
 }
@@ -503,6 +562,7 @@ export function parseDetail(content: string, id: string, display?: DisplayMeta):
     blockedBy: fm.blockedBy,
     body,
     comments: parseComments(content, fm.bodyStart),
+    ...(fm.warnings.length ? { warnings: fm.warnings } : {}),
     ...display,
   };
 }
@@ -538,6 +598,12 @@ function parseComments(content: string, bodyStart: number): Comment[] {
   return comments.filter((c) => c.body !== "");
 }
 
+/** Parse an `Issue`'s or `IssueDetail`'s frontmatter fields. Known field lines
+ *  are recognized file-wide (outside fenced code blocks), with emphasis around
+ *  the field name tolerated — to-tickets' template writes `**Status:**` BELOW
+ *  the body's first line. Field lines under the body still render as body; the
+ *  body itself starts at the first non-blank line that isn't recognized
+ *  metadata. */
 function parseFrontmatter(content: string, id: string): Frontmatter {
   const lines = content.split("\n");
   const fallbackTitle = id.split("/").pop()?.replace(/\.md$/, "") ?? id;
@@ -549,12 +615,19 @@ function parseFrontmatter(content: string, id: string): Frontmatter {
   let labels: string[] = [];
   let assignee: string | null = null;
   let blockedBy: string[] = [];
+  const warnings: string[] = [];
   let sawHeading = false;
   // bodyStart defaults past the end so a bodyless file yields body === "".
   let bodyStart = lines.length;
+  let fenced = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+    if (isFence(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
     const h = line.match(RE_HEADING);
     const wf = line.match(RE_WAYFINDER_LINE);
 
@@ -570,10 +643,22 @@ function parseFrontmatter(content: string, id: string): Frontmatter {
       wayfinderType = wfType(wf[1]!) ?? wayfinderType;
       continue;
     }
-    const m = (re: RegExp) => line.match(re)?.[1]?.trim() ?? null;
+    const m = (re: RegExp) => unemphasize(line).match(re)?.[1]?.trim() ?? null;
     const statusRaw = m(RE_STATUS);
     if (statusRaw !== null) {
-      status = VALID_STATUS.has(statusRaw as IssueStatus) ? (statusRaw as IssueStatus) : "open";
+      if (VALID_STATUS.has(statusRaw as IssueStatus)) {
+        status = statusRaw as IssueStatus;
+      } else if (TRIAGE_ROLES.has(statusRaw)) {
+        // to-tickets' template records the triage role on the Status line —
+        // migrate it to the labels (recorded, never silent) so the issue still
+        // dispatches; the lifecycle stays open.
+        labels = addLabel(labels, statusRaw);
+        warnings.push(
+          `Status "${statusRaw}" is a triage role, not a lifecycle — read as a label; status left open`,
+        );
+      } else {
+        warnings.push(`Status value "${statusRaw}" not recognized — treated as open`);
+      }
       continue;
     }
     const typeRaw = m(RE_TYPE);
@@ -599,9 +684,9 @@ function parseFrontmatter(content: string, id: string): Frontmatter {
     // The first non-blank line that is not recognized metadata ends the
     // frontmatter block — the body starts here. Blank lines are skipped so a
     // bodyless file (no such line) leaves bodyStart at lines.length ⇒ "".
-    if (line.trim() !== "") {
+    // Field lines BELOW this point still parse above; they just also render.
+    if (line.trim() !== "" && bodyStart === lines.length) {
       bodyStart = i;
-      break;
     }
   }
 
@@ -611,7 +696,7 @@ function parseFrontmatter(content: string, id: string): Frontmatter {
   // Label or legacy backtick line), else task.
   const type: IssueType = explicitType ?? wayfinderType ?? inferType(labels) ?? "task";
 
-  return { title, status, type, labels, assignee, blockedBy, bodyStart };
+  return { title, status, type, labels, assignee, blockedBy, warnings, bodyStart };
 }
 
 /** Map a `wayfinder:<t>` token to an IssueType, or null if <t> isn't a type. */
@@ -645,7 +730,11 @@ function parseIdList(raw: string): string[] {
   const out: string[] = [];
   for (const part of raw.split(",")) {
     const v = part.trim();
-    if (v && v !== "—" && v !== "-") out.push(v);
+    if (!v || v === "—" || v === "-") continue;
+    if (/^none\b/i.test(v)) continue; // "None — can start immediately" ⇒ unblocked
+    // Titled refs ("03 — Confirm rulebook") carry their id in the first token;
+    // keep only that (blockerResolved matches on the numeric prefix).
+    out.push(v.split(/\s+/)[0]!);
   }
   return out;
 }

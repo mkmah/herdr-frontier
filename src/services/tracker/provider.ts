@@ -45,6 +45,9 @@ export interface Issue {
   tasks?: TaskTally;
   /** Last-modified epoch ms — drives the row/detail age column. */
   updatedAt?: number;
+  /** Non-canonical field lines the adapter tolerated while parsing — surfaced
+   *  so a mis-written file is visible in the UI, never silently coerced. */
+  warnings?: string[];
 }
 
 /** Count of done vs total sub-tasks on an issue (e.g. markdown checkboxes). */

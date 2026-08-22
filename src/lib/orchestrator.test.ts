@@ -88,9 +88,13 @@ describe("dispatch", () => {
     expect(dispatch(issue).kind).toBe("wayfinder");
   });
 
-  it("dispatches plain ready-for-agent to /implement {id}", () => {
+  it("dispatches plain ready-for-agent to /implement {id} carrying the TDD mandate", () => {
     const issue = mk({ labels: ["ready-for-agent"] });
-    expect(dispatch(issue)).toEqual({ kind: "implement", id: issue.id, command: `/implement ${issue.id}` });
+    expect(dispatch(issue)).toEqual({
+      kind: "implement",
+      id: issue.id,
+      command: `/implement ${issue.id}\nEvery task must be implemented test-first using the /tdd skill.`,
+    });
   });
 
   it("still implements when ready-for-agent is paired with wayfinder:map", () => {

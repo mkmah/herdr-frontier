@@ -67,6 +67,9 @@ const DetailContent: Component<DetailContentProps> = (p) => {
           {(label) => <Chip label={label} />}
         </For>
       </box>
+      {sel.warnings?.length ? (
+        <text fg={THEME.text.dim}>{`⚠ ${(sel.warnings ?? []).join(" · ")}`}</text>
+      ) : null}
       <RoleText role="meta">
         {(() => {
           const live = p.agentStatus;
@@ -76,7 +79,9 @@ const DetailContent: Component<DetailContentProps> = (p) => {
       <box flexDirection="row" paddingTop={1}>
         <RoleText role="meta">dispatch: </RoleText>
         <text fg={dispatchable ? THEME.state.done : THEME.state.human} attributes={TextAttributes.BOLD}>
-          {dispatchable ? outcome.command : "(no auto-dispatch — human turn)"}
+          {/* The first line is the command; any further lines (the TDD mandate)
+              are prompt context for the agent, not pane display. */}
+          {dispatchable ? (outcome.command.split("\n")[0] ?? outcome.command) : "(no auto-dispatch — human turn)"}
         </text>
       </box>
       {/* The run-status line remounts on its own key — the ~2s poll bumps
